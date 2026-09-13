@@ -1,6 +1,6 @@
 {
-  "name": "Circle",
-  "short_name": "Circle",
+  "name": "Chat",
+  "short_name": "Chat",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0E1116",

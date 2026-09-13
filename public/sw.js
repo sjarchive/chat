@@ -108,7 +108,7 @@ self.addEventListener("push", (event) => {
       // The sender's client encrypted the message preview to this device's
       // key (worker.js relayed it unread). Legacy/missing previews fall back
       // to a generic text.
-      let body = data.from ? `${data.from} sent you a message` : "You have a new message in Circle";
+      let body = data.from ? `${data.from} sent you a message` : "You have a new message in Chat";
       if (data.enc) {
         try {
           const text = await decryptNotify(data.enc);
@@ -118,7 +118,7 @@ self.addEventListener("push", (event) => {
         }
       }
 
-      await self.registration.showNotification(data.title || "Circle", {
+      await self.registration.showNotification(data.title || "Chat", {
         body,
         icon: "/icon-192.png",
         badge: "/icon-192.png",
