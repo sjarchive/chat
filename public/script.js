@@ -43,6 +43,21 @@ const chatPlaceholder = document.getElementById("chat-placeholder");
 
 let isSignUpMode = false;
 
+// ---------- Delivery ticks ----------
+// WhatsApp Web's own check icons (msg-check / msg-dcheck), inlined as SVG and
+// painted with currentColor. Unicode "✓" text was rendering with whatever
+// font each device fell back to, so it looked different per browser/platform;
+// SVG paths render pixel-identically everywhere. The double tick is the same
+// path drawn twice — the right check offset down and to the right, exactly as
+// WhatsApp draws it.
+const TICK_PATH =
+  "M10.91 3.316l-.478-.372a.365.365 0 00-.51.063L4.566 9.879a.32.32 0 01-.484.033L1.891 7.769a.366.366 0 00-.515.006l-.423.433a.364.364 0 00.006.514l3.258 3.185c.143.14.361.125.484-.033l6.272-8.048a.365.365 0 00-.063-.51z";
+const TICK_SVG_SINGLE = `<svg viewBox="0 0 12 15" aria-hidden="true"><path fill="currentColor" d="${TICK_PATH}"/></svg>`;
+const TICK_SVG_DOUBLE = `<svg viewBox="0 0 17 15" aria-hidden="true"><path fill="currentColor" d="${TICK_PATH}"/><path fill="currentColor" d="${TICK_PATH}" transform="translate(5.075 2.288)"/></svg>`;
+// WhatsApp's in-flight clock: outlined circle with hands, sized to sit in the
+// same 15-unit-tall box as the ticks (faded via .tick.pending).
+const TICK_SVG_CLOCK = `<svg viewBox="0 0 12 15" aria-hidden="true"><circle cx="6" cy="7.5" r="4.55" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 4.9v2.6h2.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 // ---------- Fade in / fade out ----------
 // Toggling .hidden alone can't animate: display:none isn't transitional.
 // hideEl() keeps the element rendered under .fade-out (see the CSS block in
@@ -899,7 +914,7 @@ function renderChatList() {
     if (s.last.sender_id === currentUser.id) {
       const tick = document.createElement("span");
       tick.className = "tick" + (s.last.seen_at ? " seen" : "");
-      tick.textContent = s.last.seen_at ? "✓✓" : "✓";
+      tick.innerHTML = s.last.seen_at ? TICK_SVG_DOUBLE : TICK_SVG_SINGLE;
       preview.appendChild(tick);
     }
     preview.appendChild(document.createTextNode(s.preview != null ? s.preview : previewText(s.last)));
@@ -1313,7 +1328,7 @@ function buildMessagesChannel() {
         if (row) {
           const tick = row.querySelector(".tick");
           if (tick) {
-            tick.textContent = "✓✓";
+            tick.innerHTML = TICK_SVG_DOUBLE;
             tick.classList.add("seen");
           }
         }
@@ -1752,17 +1767,17 @@ function renderMessage(msg) {
   if (mine) {
     const tick = document.createElement("span");
     tick.className = "tick";
-    // Faded tick while the send is still in flight (optimistic bubble),
+    // Faded clock while the send is still in flight (optimistic bubble),
     // single tick once actually confirmed sent, double (accent blue) once
     // the recipient saw it.
     if (msg._pending) {
-      tick.textContent = "✓";
+      tick.innerHTML = TICK_SVG_CLOCK;
       tick.classList.add("pending");
     } else if (msg.seen_at) {
-      tick.textContent = "✓✓";
+      tick.innerHTML = TICK_SVG_DOUBLE;
       tick.classList.add("seen");
     } else {
-      tick.textContent = "✓";
+      tick.innerHTML = TICK_SVG_SINGLE;
     }
     meta.appendChild(tick);
   }
@@ -2098,7 +2113,12 @@ function resolvePendingMessage(optimisticMsg, realMsg) {
     messageRowById[optimisticMsg.id] = pendingRow;
     pendingRow.dataset.msgId = optimisticMsg.id;
     const tick = pendingRow.querySelector(".tick");
-    if (tick) tick.classList.remove("pending");
+    if (tick) {
+      // The optimistic bubble rendered the clock, not a tick — swap the icon
+      // itself, not just the opacity.
+      tick.innerHTML = TICK_SVG_SINGLE;
+      tick.classList.remove("pending");
+    }
   }
 }
 

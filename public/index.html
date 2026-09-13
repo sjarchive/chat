@@ -502,8 +502,9 @@ html.kb-following-scroll .screen {
 .theirs .bubble .meta { color: var(--text-dim); }
 [data-theme="light"] .mine .bubble .meta { color: rgba(17,27,33,0.55); }
 
-.bubble .meta .tick { font-size: 12px; letter-spacing: -1px; }
-.bubble .meta .tick.seen { color: #53BDEB; letter-spacing: -2px; }
+.bubble .meta .tick { display: inline-flex; }
+.bubble .meta .tick svg { height: 15px; width: auto; display: block; }
+.bubble .meta .tick.seen { color: #53BDEB; }
 .bubble .meta .tick.pending { opacity: 0.5; }
 
 .bubble img.media {
@@ -762,8 +763,11 @@ html.kb-following-scroll .screen {
 .chat-item-preview .tick {
   margin-right: 4px;
   color: var(--text-dim);
+  display: inline-flex;
+  vertical-align: -2px;
 }
-.chat-item-preview .tick.seen { color: #53BDEB; letter-spacing: -2px; }
+.chat-item-preview .tick svg { height: 13px; width: auto; display: block; }
+.chat-item-preview .tick.seen { color: #53BDEB; }
 
 .chat-item-badge {
   background: var(--accent);
