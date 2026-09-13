@@ -881,17 +881,11 @@ function renderChatList() {
     const time = document.createElement("span");
     time.className = "chat-item-time";
     time.textContent = timeLabel(s.last.created_at);
-    // The online dot lives on the timestamp line, right of the time — the
-    // top-right corner stays one aligned group instead of the dot floating
-    // beside the info block at a different height than the time.
+    // The online dot only shows in the open chat's header now — chats-list
+    // rows no longer append one here.
     const right = document.createElement("span");
     right.className = "chat-item-right";
     right.appendChild(time);
-    if (onlineUsers.has(partner)) {
-      const dot = makePresenceDot();
-      dot.classList.add("tip-edge");
-      right.appendChild(dot);
-    }
     top.appendChild(name);
     top.appendChild(right);
 
