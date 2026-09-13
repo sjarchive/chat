@@ -2405,6 +2405,27 @@ let appliedAppOffset = null;
 // viewport did not just change size.
 let lastLayoutHeight = document.documentElement.clientHeight;
 
+// While a pure viewport scroll moves the pinning offset (keyboard already
+// open, user switched to another input), the transform transition on .screen
+// would animate the change and fight the browser's own movement — the
+// field-switch stutter on the auth form. Suppress the ease for these steps
+// and restore it once the scrolling settles, so the keyboard open/close
+// animation (which changes height) is still eased.
+let scrollEaseTimer = null;
+
+function suppressTransformEase() {
+  document.documentElement.classList.add("kb-following-scroll");
+  clearTimeout(scrollEaseTimer);
+  scrollEaseTimer = setTimeout(() => {
+    document.documentElement.classList.remove("kb-following-scroll");
+  }, 250);
+}
+
+function restoreTransformEase() {
+  clearTimeout(scrollEaseTimer);
+  document.documentElement.classList.remove("kb-following-scroll");
+}
+
 function syncViewportVars() {
   viewportSyncQueued = false;
   const vv = window.visualViewport;
@@ -2415,13 +2436,23 @@ function syncViewportVars() {
   const height = `${vv ? vv.height : window.innerHeight}px`;
   const offsetTop = !layoutResized && vv && vv.offsetTop ? `${vv.offsetTop}px` : "0px";
 
-  if (height !== appliedAppHeight) {
+  const heightChanged = height !== appliedAppHeight;
+  if (heightChanged) {
+    // Keyboard opening or closing: the offset rides along with the height
+    // change, and this is the one motion worth easing.
     appliedAppHeight = height;
     document.documentElement.style.setProperty("--app-height", height);
-  }
-  if (offsetTop !== appliedAppOffset) {
+    restoreTransformEase();
+    if (offsetTop !== appliedAppOffset) {
+      appliedAppOffset = offsetTop;
+      document.documentElement.style.setProperty("--app-offset-top", offsetTop);
+    }
+  } else if (offsetTop !== appliedAppOffset) {
+    // Offset moved on its own — the browser scrolled the visual viewport
+    // (e.g. to reveal the newly focused field). Track it with no ease.
     appliedAppOffset = offsetTop;
     document.documentElement.style.setProperty("--app-offset-top", offsetTop);
+    suppressTransformEase();
   }
 
   // Keep the composer in view when the keyboard is open
