@@ -214,14 +214,26 @@ html.kb-following-scroll .screen {
 
 /* ---------- Auth ---------- */
 /* The auth screen opts OUT of the keyboard-pinning translateY (.screen applies
-   it via --app-offset-top). With the keyboard open, tapping between the
-   fields makes the browser scroll to reveal the newly focused input; the
-   pinning translate cancels that scroll, the browser scrolls again, and the
-   screen visibly jerks on every field switch. The chat composer needs the
-   pinning; the auth form doesn't — with overflow-y:auto + margin:auto
-   centering below, the browser's own scroll-into-view reveals any field
-   natively, so fighting it only ever hurt. */
-#auth-screen { align-items: center; padding: 24px; transform: none; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+   it via --app-offset-top) AND out of document flow entirely. With the
+   keyboard open, tapping between the fields makes the browser scroll to
+   reveal the newly focused input; while the screen was in normal flow it
+   scrolled the whole <html> document for a frame and snapped back — the
+   millisecond whole-screen jerk on every field switch. position:fixed leaves
+   the page underneath with nothing to scroll, so only this container can
+   move: overflow-y:auto + margin:auto centering let the browser's native
+   focus-scroll reveal any field inside the card smoothly. The chat composer
+   still needs the pinning; the auth form never did. */
+#auth-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  align-items: center;
+  padding: 24px;
+  transform: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 .auth-card { width: 100%; max-width: 380px; text-align: center; margin: auto; }
 
