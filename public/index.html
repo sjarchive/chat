@@ -213,9 +213,17 @@ html.kb-following-scroll .screen {
 .screen { height: 100dvh; height: calc(var(--app-height, 100dvh)); display: flex; flex-direction: column; position: relative; transform: translateY(var(--app-offset-top, 0px)); }
 
 /* ---------- Auth ---------- */
-#auth-screen { align-items: center; justify-content: center; padding: 24px; }
+/* The auth screen opts OUT of the keyboard-pinning translateY (.screen applies
+   it via --app-offset-top). With the keyboard open, tapping between the
+   fields makes the browser scroll to reveal the newly focused input; the
+   pinning translate cancels that scroll, the browser scrolls again, and the
+   screen visibly jerks on every field switch. The chat composer needs the
+   pinning; the auth form doesn't — with overflow-y:auto + margin:auto
+   centering below, the browser's own scroll-into-view reveals any field
+   natively, so fighting it only ever hurt. */
+#auth-screen { align-items: center; padding: 24px; transform: none; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
-.auth-card { width: 100%; max-width: 380px; text-align: center; }
+.auth-card { width: 100%; max-width: 380px; text-align: center; margin: auto; }
 
 .auth-title { font-size: 36px; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 4px; }
 .auth-sub { color: var(--text-dim); font-size: 15px; margin-bottom: 28px; }
