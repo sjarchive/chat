@@ -62,7 +62,7 @@ async function handleNotify(request, env) {
   // is public metadata in profiles anyway.
   const pushMessage = {
     data: JSON.stringify({
-      title: "Circle",
+      title: "Chat",
       enc: message.notify || null,
       from: senderName,
     }),
