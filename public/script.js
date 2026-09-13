@@ -39,6 +39,7 @@ const settingsError = document.getElementById("settings-error");
 const settingsSave = document.getElementById("settings-save");
 const settingsCancel = document.getElementById("settings-cancel");
 const composerError = document.getElementById("composer-error");
+const chatPlaceholder = document.getElementById("chat-placeholder");
 
 let isSignUpMode = false;
 
@@ -669,11 +670,27 @@ function closeConversation() {
   // No conversation open means the header dot has no partner to show.
   renderPresence();
   clearStoredOpenChat();
-  // Desktop two-pane: drop the right pane back to the placeholder and clear
-  // the active row highlight in the list.
-  document.documentElement.classList.remove("chat-open");
+  // Desktop two-pane: the conversation pane fades out in its own spot (the
+  // desktop CSS keeps fading screens in flow), so .chat-open must stay until
+  // that fade finishes — removing it now would display:none the pane and cut
+  // the fade to a hard cut. After the fade, hand the space to the placeholder
+  // and fade IT in the same way. Reopening a conversation in the meantime
+  // cancels the swap (the guard below sees a partner again).
+  if (isDesktopLayout()) {
+    clearTimeout(desktopChatCloseTimer);
+    desktopChatCloseTimer = setTimeout(() => {
+      if (currentPartner) return;
+      document.documentElement.classList.remove("chat-open");
+      showEl(chatPlaceholder);
+    }, FADE_MS);
+  } else {
+    document.documentElement.classList.remove("chat-open");
+  }
   updateActiveChatItem();
 }
+
+// Pending desktop hand-off from conversation pane back to the placeholder.
+let desktopChatCloseTimer = null;
 
 async function goBackToChats() {
   closeConversation();
@@ -2369,26 +2386,54 @@ async function subscribeToPush(registration, userId) {
 }
 
 // ---------- Keep layout height accurate when the mobile keyboard opens/closes ----------
-function setAppHeight() {
-  const vv = window.visualViewport;
-  const height = vv ? vv.height : window.innerHeight;
-  document.documentElement.style.setProperty("--app-height", `${height}px`);
+// visualViewport fires resize AND scroll in bursts while the keyboard animates.
+// Applying each event immediately would write the CSS vars — and re-layout the
+// page — several times per frame with values that can momentarily disagree,
+// which is the one-frame jitter as the composer follows the keyboard. Coalesce
+// to one update per animation frame and only touch the DOM on real changes.
+let viewportSyncQueued = false;
+let appliedAppHeight = null;
+let appliedAppOffset = null;
 
-  // Safety net for browsers that scroll instead of resizing (e.g. iOS Safari):
-  // pin every screen to the visual viewport's offset via a shared CSS var,
-  // rather than looking up "the visible one" — right after a refresh, the
-  // has-session flash-prevention CSS can show a screen visually before its
-  // "hidden" class has actually been removed, so a querySelector(".screen
-  // :not(.hidden)") lookup here would grab the wrong element (or none).
-  document.documentElement.style.setProperty(
-    "--app-offset-top",
-    vv && vv.offsetTop ? `${vv.offsetTop}px` : "0px"
-  );
+// Layout-viewport height at the previous sync. Browsers that RESIZE the page
+// for the keyboard (Android Chrome with interactive-widget=resizes-content)
+// briefly report a non-zero visual-viewport offsetTop mid-animation even
+// though the layout viewport is already the source of truth — pinning the
+// screens to that transient offset via translateY is a single mid-animation
+// jump. Only browsers that SCROLL instead (iOS Safari, layout viewport
+// unchanged) genuinely need the pinning, so apply it only when the layout
+// viewport did not just change size.
+let lastLayoutHeight = document.documentElement.clientHeight;
+
+function syncViewportVars() {
+  viewportSyncQueued = false;
+  const vv = window.visualViewport;
+  const layoutHeight = document.documentElement.clientHeight;
+  const layoutResized = layoutHeight !== lastLayoutHeight;
+  lastLayoutHeight = layoutHeight;
+
+  const height = `${vv ? vv.height : window.innerHeight}px`;
+  const offsetTop = !layoutResized && vv && vv.offsetTop ? `${vv.offsetTop}px` : "0px";
+
+  if (height !== appliedAppHeight) {
+    appliedAppHeight = height;
+    document.documentElement.style.setProperty("--app-height", height);
+  }
+  if (offsetTop !== appliedAppOffset) {
+    appliedAppOffset = offsetTop;
+    document.documentElement.style.setProperty("--app-offset-top", offsetTop);
+  }
 
   // Keep the composer in view when the keyboard is open
   if (document.activeElement === messageInput) {
     scrollToBottom();
   }
+}
+
+function setAppHeight() {
+  if (viewportSyncQueued) return;
+  viewportSyncQueued = true;
+  requestAnimationFrame(syncViewportVars);
 }
 setAppHeight();
 if (window.visualViewport) {

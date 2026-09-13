@@ -170,7 +170,10 @@ input, textarea {
    and removes it next frame so the element transitions in. */
 /* background/color kept from the universal theme cross-fade rule, which this
    more specific transition property list would otherwise override. */
-.screen { transition: opacity 0.18s ease, background-color 0.3s ease, color 0.3s ease; }
+/* transform is transitioned (briefly) so a step change of --app-offset-top —
+   the keyboard pinning offset on browsers that scroll instead of resize —
+   eases in instead of jumping the whole screen by a few pixels in one frame. */
+.screen { transition: opacity 0.18s ease, transform 0.15s ease, background-color 0.3s ease, color 0.3s ease; }
 /* Screens live in normal flow, so during a cross-fade the outgoing one must
    overlay instead of stacking (two 100dvh blocks would double the page
    height). Fixed + inset:0 lifts it out of flow for the fade's duration. */
@@ -187,7 +190,11 @@ input, textarea {
 .fade-out { opacity: 0 !important; pointer-events: none; }
 /* Popovers settle upward/outward when appearing, reverse when leaving. */
 .search-results.fade-out { transform: translateY(-6px); }
-.settings-overlay.fade-out { transform: scale(0.98); }
+/* The settle-scale belongs on the CARD, never the overlay: scaling the
+   overlay shrinks the backdrop rectangle away from the screen edges, which
+   shows the dim as a grey rectangle with visible boundaries while it fades.
+   The card shrinking slightly reads as the dialog "settling" instead. */
+.settings-overlay.fade-out .settings-card { transform: scale(0.98); }
 .reply-preview.fade-out { transform: translateY(100%); }
 .composer-error.fade-out { transform: translateY(100%); }
 .jump-bottom { transition: opacity 0.18s ease, transform 0.18s ease, filter 0.15s ease, background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
@@ -374,6 +381,21 @@ input, textarea {
 [data-tip].tip-edge.tip-on::after {
   transform: translateY(0);
 }
+
+/* ---------- Encryption notice (top of every conversation) ---------- */
+.encryption-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.encryption-notice svg { flex-shrink: 0; opacity: 0.75; }
 
 .message-list {
   flex: 1;
@@ -737,6 +759,9 @@ input, textarea {
   color: var(--text-dim);
   font-size: 15px;
   background: var(--surface-2);
+  /* Fades in via the shared .fade-out mechanism (script.js removes the class
+     the frame after the placeholder is revealed, once a conversation closes). */
+  transition: opacity 0.18s ease, background-color 0.3s ease;
 }
 #chat-placeholder svg { opacity: 0.45; }
 
@@ -777,6 +802,13 @@ input, textarea {
   }
 
   html.app-visible #chat-screen { flex: 1; min-width: 0; }
+
+  /* While a screen fades out, the mobile rules lift it out of flow with
+     position:fixed inset:0 — on desktop that would stretch the fading
+     conversation across BOTH panes, blanking the chats list for the fade's
+     duration. Keep fading screens as normal flex panes instead: each one
+     simply fades out in place, exactly like before the two-pane layout. */
+  html.app-visible .screen.fade-out { position: relative; inset: auto; z-index: auto; }
 
   /* Right pane only exists while a chat is open; otherwise the placeholder
      fills the space. During the pre-JS flash-prevention window on a refresh
@@ -888,13 +920,26 @@ input, textarea {
 /* ---------- Settings modal ---------- */
 .settings-overlay {
   position: fixed;
-  inset: 0;
+  /* Sized from --app-height (kept in sync with the screens by script.js)
+     instead of inset-bottom, so the dialog re-centers inside the keyboard-
+     shrunken visible area in the same frame the composer moves — tracking
+     the layout viewport instead let the two move a frame apart, which read
+     as a one-off jitter while the keyboard animated. */
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--app-height, 100dvh));
+  transform: translateY(var(--app-offset-top, 0px));
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
   z-index: 10;
+  /* No transform transition: the keyboard-pinning translateY above must track
+     the screens instantly (their transform eases briefly instead). Opacity
+     still fades; the settle-scale lives on .settings-card below. */
+  transition: opacity 0.18s ease, background-color 0.3s ease, border-color 0.3s ease;
 }
 .settings-card {
   width: 100%;
@@ -904,6 +949,7 @@ input, textarea {
   border-radius: 18px;
   padding: 24px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  transition: transform 0.18s ease, background-color 0.3s ease, border-color 0.3s ease;
 }
 .settings-card h2 { font-size: 20px; font-weight: 600; margin-bottom: 14px; }
 .settings-label { display: block; font-size: 14px; color: var(--text-dim); margin-bottom: 6px; }
@@ -1033,6 +1079,11 @@ input, textarea {
       <span id="partner-presence" class="presence-dot tip-edge hidden" data-tip="Online" role="img" aria-label="Online"></span>
     </header>
 
+    <div class="encryption-notice" role="note">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      Messages are end-to-end encrypted
+    </div>
+
     <main id="message-list" class="message-list"></main>
 
     <div class="composer-stack">
@@ -1084,7 +1135,6 @@ input, textarea {
         <div class="settings-actions">
           <button type="button" id="settings-cancel" class="link-button">Cancel</button>
           <button type="button" id="settings-save">Save</button>
-        </div>
       </div>
     </div>
   </div>
