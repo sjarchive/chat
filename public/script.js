@@ -534,6 +534,15 @@ async function enterApp() {
   hideEl(authScreen);
   setAppHeight();
 
+  // Open the realtime websocket NOW, before the crypto/profile round trips
+  // below: supabase-js only connects the socket lazily when the first channel
+  // subscribes, which otherwise serialized the TLS+websocket handshake behind
+  // setupKeys() and loadProfiles() — the first few seconds after login were a
+  // dead window where incoming messages couldn't reach the app at all.
+  // Connecting here overlaps the handshake with that work. ensureRealtime()
+  // below remains idempotent and still owns the channel lifecycle.
+  supabaseClient.realtime.connect();
+
   // Unlock (or first-time create) this device's encryption key before any
   // message can render — the login password is only in hand on an active
   // sign-in; afterwards the key is cached locally and this is instant.
@@ -667,9 +676,12 @@ async function openConversation(partnerId, replace = false) {
   userSearch.value = "";
   hideSearchResults();
 
-  await loadMessages();
+  // Neither the typing channel nor the seen-marking depends on the history
+  // fetch — start them first so the channel join and the seen UPDATE overlap
+  // the loadMessages round trip instead of queuing behind it.
   subscribeTyping();
   markConversationSeen();
+  await loadMessages();
 }
 
 function closeConversation() {

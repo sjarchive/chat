@@ -37,6 +37,12 @@ const CircleCrypto = (() => {
   let myPubB64 = null; // same, base64
 
   const pubKeyCache = {}; // userId -> base64 public key
+  // "peerB64|info" -> derived CryptoKey. The derivation is deterministic for a
+  // given (my key, peer key, purpose label), so caching it turns every seal/
+  // unseal after the first into a single AES-GCM call instead of a full ECDH
+  // round trip per message. Cleared whenever a different private key is
+  // adopted (sign-in as another user), which invalidates every entry.
+  const aesKeyCache = {};
 
   // ---------- encoding helpers ----------
   function b64(bytes) {
@@ -101,6 +107,8 @@ const CircleCrypto = (() => {
     myPriv = await crypto.subtle.importKey("jwk", jwk, { name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
     myPubRaw = await pubRawFromJwk(jwk);
     myPubB64 = b64(myPubRaw);
+    // Keys derived under the previous private key are no longer valid.
+    for (const k of Object.keys(aesKeyCache)) delete aesKeyCache[k];
   }
 
   async function fetchPublicKey(userId) {
@@ -202,12 +210,22 @@ const CircleCrypto = (() => {
   // AES-GCM key from the ECDH shared secret, bound to both public keys and a
   // purpose label. Mirrored in sw.js for push previews — keep in sync.
   async function aesKeyFor(peerRawBytes, info) {
+    const peerB64 = b64(peerRawBytes);
+    const cacheId = peerB64 + "|" + info;
+    const cached = aesKeyCache[cacheId];
+    if (cached) return cached;
     const peer = await crypto.subtle.importKey("raw", peerRawBytes, { name: "ECDH", namedCurve: "P-256" }, false, []);
     const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: peer }, myPriv, 256));
-    const peerB64 = b64(peerRawBytes);
     const [p1, p2] = myPubB64 < peerB64 ? [myPubRaw, peerRawBytes] : [peerRawBytes, myPubRaw];
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", concatBytes(shared, p1, p2, encoder.encode(info))));
-    return crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", concatBytes(shared, p1, p2, encoder.encode(info)))
+    );
+    const key = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, [
+      "encrypt",
+      "decrypt",
+    ]);
+    aesKeyCache[cacheId] = key;
+    return key;
   }
 
   async function seal(peerRaw, obj, info) {
@@ -234,15 +252,20 @@ const CircleCrypto = (() => {
     const partnerPub = await fetchPublicKey(partnerId);
     if (!partnerPub) return null;
     const partnerRaw = unb64(partnerPub);
+    // The three seals are independent — run them concurrently instead of
+    // chaining three sequential crypto round trips on the send path.
+    const [r, s, notifySeal] = await Promise.all([
+      seal(partnerRaw, payload, MSG_INFO), // readable by the recipient
+      seal(myPubRaw, payload, MSG_INFO), // readable by my own devices
+      seal(partnerRaw, { b: preview }, NOTIFY_INFO),
+    ]);
     const container = {
       v: 1,
       k: myPubB64, // sender's public key — the recipient needs it to derive the key
-      r: await seal(partnerRaw, payload, MSG_INFO), // readable by the recipient
-      s: await seal(myPubRaw, payload, MSG_INFO), // readable by my own devices
+      r,
+      s,
     };
-    const notify = b64(
-      encoder.encode(JSON.stringify({ spk: myPubB64, d: await seal(partnerRaw, { b: preview }, NOTIFY_INFO) }))
-    );
+    const notify = b64(encoder.encode(JSON.stringify({ spk: myPubB64, d: notifySeal })));
     return { body: PREFIX + JSON.stringify(container), notify };
   }
 
