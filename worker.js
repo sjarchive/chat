@@ -11,7 +11,27 @@ export default {
     // Everything else: serve the static PWA files.
     return env.ASSETS.fetch(request);
   },
+
+  // Cron trigger (see wrangler.jsonc `triggers.crons`) — replaces the old
+  // GitHub Actions keep-alive workflow. Free-tier Supabase projects
+  // auto-pause after 7 days with no API activity; this pings a lightweight
+  // REST endpoint every 4 days to leave margin in case a run is skipped.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(pingSupabase(env));
+  },
 };
+
+async function pingSupabase(env) {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&limit=1`, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+  if (!res.ok) {
+    console.error("Supabase keep-alive ping failed:", res.status, await res.text());
+  }
+}
 
 async function handleNotify(request, env, ctx) {
   // Simple shared-secret check so random people on the internet can't
