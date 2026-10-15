@@ -12,24 +12,43 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  // Cron trigger (see wrangler.jsonc `triggers.crons`) — replaces the old
-  // GitHub Actions keep-alive workflow. Free-tier Supabase projects
-  // auto-pause after 7 days with no API activity; this pings a lightweight
-  // REST endpoint every 4 days to leave margin in case a run is skipped.
-  async scheduled(event, env, ctx) {
+  // Cron trigger (see wrangler.jsonc `triggers.crons`).
+  // Supabase pauses Free Plan projects that do not receive a few database
+  // queries each day over a 7-day rolling window. Running every 6 hours
+  // (4x/day) and querying multiple tables keeps Postgres actively engaged.
+  async scheduled(controller, env, ctx) {
     ctx.waitUntil(pingSupabase(env));
   },
 };
 
 async function pingSupabase(env) {
-  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/profiles?select=id&limit=1`, {
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-  });
-  if (!res.ok) {
-    console.error("Supabase keep-alive ping failed:", res.status, await res.text());
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Worker environment.");
+  }
+
+  const headers = {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    "Cache-Control": "no-cache",
+    Prefer: "count=exact",
+  };
+
+  // Query both tables in parallel so each scheduled run generates multiple
+  // uncached PostgREST -> Postgres queries every 6 hours (8 DB queries/day).
+  const endpoints = [
+    `${env.SUPABASE_URL}/rest/v1/profiles?select=id&limit=1`,
+    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?select=endpoint&limit=1`,
+  ];
+
+  const responses = await Promise.all(
+    endpoints.map((endpoint) => fetch(endpoint, { headers }))
+  );
+
+  for (const res of responses) {
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Supabase keep-alive query failed (${res.status}): ${body}`);
+    }
   }
 }
 
