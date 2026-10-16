@@ -90,8 +90,19 @@ html, body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent mobile pull-to-refresh / viewport rubber-banding from dragging the app shell */
+  overscroll-behavior: none;
   /* Telegram-ish default scale: everything in rem/em below inherits this */
   font-size: 16.5px;
+}
+
+button,
+.chat-item,
+.search-result,
+.quoted-msg,
+.media-file {
+  touch-action: manipulation;
 }
 
 /* ---------- Text selection policy ----------
@@ -229,9 +240,10 @@ html.kb-following-scroll .screen {
   left: 0;
   right: 0;
   align-items: center;
-  padding: 24px;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   transform: none;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -285,22 +297,33 @@ html.kb-following-scroll .screen {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
-  padding-top: max(12px, env(safe-area-inset-top));
+  padding: max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.chat-header-info { display: flex; flex-direction: column; }
-.chat-title { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
-.chat-sub { font-size: 13px; color: var(--text-dim); }
+.chat-header-info { display: flex; flex-direction: column; min-width: 0; }
+.chat-title {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* The chat screen's own header (partner name) sits directly above the
    encryption notice, so it's trimmed to a slimmer bar rather than the
    chats-list header's full-size padding/type. */
 #chat-screen .chat-header {
-  padding: 6px 14px;
-  padding-top: max(6px, env(safe-area-inset-top));
+  padding: max(6px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 6px max(14px, env(safe-area-inset-left));
 }
 #chat-screen .chat-header .icon-button { padding: 6px; font-size: 17px; }
 #chat-screen .chat-title { font-size: 16px; }
@@ -441,21 +464,20 @@ html.kb-following-scroll .screen {
 .message-list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 14px;
+  padding: 16px max(14px, env(safe-area-inset-right)) 16px max(14px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 2px;
   position: relative;
 }
 
-.msg-row { display: flex; margin-bottom: 2px;
-  /* content-visibility: auto was previously used here to skip rendering
-     off-screen rows, but its 44px placeholders made the scroll height change
-     on the fly as real heights registered mid-scroll — the scrollbar jumped
-     and content shifted under the finger on first pass through history.
-     History is capped at 200 messages, so rendering everything up front is
-     affordable and makes the scrollbar exact from the first paint. */ }
+.msg-row {
+  display: flex;
+  margin-bottom: 2px;
+  contain: layout style;
+}
 .msg-row.grouped { margin-bottom: 2px; }
 .msg-row.group-start { margin-top: 10px; }
 .msg-row.mine { justify-content: flex-end; }
@@ -468,14 +490,13 @@ html.kb-following-scroll .screen {
   font-size: 16px;
   line-height: 1.4;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
   box-shadow: 0 1px 1px rgba(11, 20, 26, 0.14);
 }
-.mine .bubble { background: var(--mine-bg); color: var(--mine-text); border-bottom-right-radius: 6px; }
-.theirs .bubble { background: var(--theirs-bg); color: var(--theirs-text); border-bottom-left-radius: 6px; }
+.mine .bubble { background: var(--mine-bg); color: var(--mine-text); }
+.theirs .bubble { background: var(--theirs-bg); color: var(--theirs-text); }
 
 /* Tighten the tail-corner only on the last bubble of a consecutive group */
-.mine .bubble { border-radius: 14px; }
-.theirs .bubble { border-radius: 14px; }
 .msg-row.mine.group-last .bubble { border-bottom-right-radius: 6px; }
 .msg-row.theirs.group-last .bubble { border-bottom-left-radius: 6px; }
 
@@ -665,12 +686,11 @@ html.kb-following-scroll .screen {
 }
 
 /* ---------- Chats list ---------- */
-.chat-header .chat-header-info { min-width: 0; }
 #back-button { margin-right: 4px; }
 
 .search-bar {
   position: relative;
-  padding: 8px 12px 10px;
+  padding: 8px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -715,12 +735,13 @@ html.kb-following-scroll .screen {
 .chat-list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   background: var(--bg);
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 5px;
+  padding: 5px max(5px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left));
 }
 .chat-item {
   display: flex;
@@ -732,6 +753,7 @@ html.kb-following-scroll .screen {
   border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  contain: layout style;
 }
 .chat-item:hover { filter: brightness(1.04); }
 .chat-item:active { filter: brightness(0.96); }
@@ -745,7 +767,14 @@ html.kb-following-scroll .screen {
   align-items: baseline;
   gap: 8px;
 }
-.chat-item-name { font-size: 16px; font-weight: 600; }
+.chat-item-name {
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .chat-item-time { font-size: 13px; color: var(--text-dim); flex-shrink: 0; }
 .chat-item-bottom {
   display: flex;
@@ -913,8 +942,7 @@ html.kb-following-scroll .screen {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
-  padding-bottom: max(9px, env(safe-area-inset-bottom));
+  padding: 9px max(10px, env(safe-area-inset-right)) max(9px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   background: var(--surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -1288,9 +1316,48 @@ const CircleCrypto = (() => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, "readwrite");
       tx.objectStore(IDB_STORE).put(value, key);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
     });
+  }
+
+  async function idbDelete(key) {
+    const db = await idbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).delete(key);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error);
+      };
+    });
+  }
+
+  function clearSession() {
+    myUserId = null;
+    myPriv = null;
+    myPubRaw = null;
+    myPubB64 = null;
+    for (const k of Object.keys(aesKeyCache)) delete aesKeyCache[k];
+    idbDelete("private-key").catch(() => {});
   }
 
   // ---------- key management ----------
@@ -1520,7 +1587,7 @@ const CircleCrypto = (() => {
     }
   }
 
-  return { setupKeys, ready, cachePublicKey, encryptOutgoing, decryptRow, encryptFileForSend, decryptMedia };
+  return { setupKeys, ready, clearSession, cachePublicKey, encryptOutgoing, decryptRow, encryptFileForSend, decryptMedia };
 })();
 
   </script>
@@ -1634,6 +1701,20 @@ let profilesChannelSince = 0;
 let presenceChannel = null; // shared realtime presence channel (green online dots)
 let presenceChannelSince = 0;
 let onlineUsers = new Set(); // user ids currently connected, from presence sync
+let conversationLoadSeq = 0; // monotonic token so stale in-flight chat loads abort cleanly
+let activeBlobUrls = new Set(); // revoked whenever the message list clears to prevent memory leaks
+let pendingOutgoingByBody = []; // tracks in-flight optimistic messages so Realtime echoes reconcile cleanly
+
+// Reusable Intl formatters avoid instantiating locale formatters per message row (up to 200x per chat open)
+const TIME_FORMATTER = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit", hour12: true });
+const SHORT_DATE_FORMATTER = new Intl.DateTimeFormat([], { month: "short", day: "numeric" });
+const LONG_DATE_FORMATTER = new Intl.DateTimeFormat([], { month: "long", day: "numeric" });
+const LONG_DATE_YEAR_FORMATTER = new Intl.DateTimeFormat([], { month: "long", day: "numeric", year: "numeric" });
+
+function trackBlobUrl(url) {
+  if (url && url.startsWith("blob:")) activeBlobUrls.add(url);
+  return url;
+}
 
 // ---------- Theme toggle ----------
 const SUN_ICON = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
@@ -1922,7 +2003,12 @@ supabaseClient.auth.onAuthStateChange((_event, session) => {
 function resetToAuthScreen() {
   currentUser = null;
   currentPartner = null;
+  CircleCrypto.clearSession();
   closeConversation();
+  clearMessageList();
+  chatSummaries = {};
+  lastChatListSignature = null;
+  chatList.innerHTML = "";
   // Leaving also stops broadcasting presence: removing the channel sends the
   // leave, so other users' dots go gray immediately rather than waiting for
   // the socket to time out. Clear the local set too so no dot outlives it.
@@ -2090,25 +2176,30 @@ async function enterApp() {
   // openConversation() runs (after profiles load). No-op on mobile.
   if (savedPartner) document.documentElement.classList.add("chat-open");
 
-  loadProfiles().then(() => {
-    // ensureRealtime() is idempotent: sign out/back in within this tab, tab
-    // refocuses and the periodic sync all reuse healthy channels instead of
-    // stacking duplicates (each duplicate would process — and render — every
-    // message event multiple times).
-    ensureRealtime();
-    if (savedPartner) {
-      chatsScreen.classList.add("hidden");
-      loadChatSummaries();
-      // replace=true: the refresh already reused this history entry, so
-      // re-opening must not push a duplicate chat entry behind back.
-      openConversation(savedPartner, true);
-    } else {
-      currentPartner = null;
-      document.documentElement.classList.remove("chat-open");
-      chatScreen.classList.add("hidden");
-      chatsScreen.classList.remove("hidden");
-      loadChatSummaries();
+  // Start realtime subscriptions and initial data fetches in parallel rather
+  // than waiting on loadProfiles() before fetching messages/summaries.
+  ensureRealtime();
+  const profilesPromise = loadProfiles();
+  if (savedPartner) {
+    chatsScreen.classList.add("hidden");
+    loadChatSummaries();
+    // replace=true: the refresh already reused this history entry, so
+    // re-opening must not push a duplicate chat entry behind back.
+    openConversation(savedPartner, true);
+  } else {
+    currentPartner = null;
+    document.documentElement.classList.remove("chat-open");
+    chatScreen.classList.add("hidden");
+    chatsScreen.classList.remove("hidden");
+    loadChatSummaries();
+  }
+  profilesPromise.then(() => {
+    if (!currentUser) return;
+    if (currentPartner && profileCache[currentPartner]) {
+      chatPartnerName.textContent = profileCache[currentPartner];
+      updatePartnerNameTitle();
     }
+    renderChatListIfVisible();
   });
 }
 
@@ -2155,6 +2246,8 @@ function updatePartnerNameTitle() {
 // conversation) swaps the state on the current entry rather than stacking
 // a duplicate one.
 async function openConversation(partnerId, replace = false) {
+  clearTimeout(desktopChatCloseTimer);
+  hideEl(chatPlaceholder);
   currentPartner = partnerId;
   setStoredOpenChat(partnerId);
   try {
@@ -2212,6 +2305,7 @@ async function openConversation(partnerId, replace = false) {
 }
 
 function closeConversation() {
+  conversationLoadSeq++;
   // Detach the typing broadcast for this conversation so signals from it
   // stop arriving while browsing the chats list (or after sign-out).
   if (typingChannel) {
@@ -2362,8 +2456,8 @@ function timeLabel(iso) {
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   // hour12 forces AM/PM everywhere — a bare toLocaleTimeString follows the
   // device's locale/clock setting, which renders 24-hour on many phones.
-  if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (sameDay) return TIME_FORMATTER.format(d);
+  return SHORT_DATE_FORMATTER.format(d);
 }
 
 // Rebuilding the list resets its scroll position and tap/hover states, so
@@ -2399,10 +2493,13 @@ function renderChatList() {
   const signature = partners
     .map(
       (p) =>
-        `${p}:${chatSummaries[p].last?.id}:${chatSummaries[p].unread}:${profileCache[p] ?? ""}:${chatSummaries[p].preview ?? ""}:${onlineUsers.has(p) ? 1 : 0}`
+        `${p}:${chatSummaries[p].last?.id}:${chatSummaries[p].last?.seen_at ? 1 : 0}:${chatSummaries[p].unread}:${profileCache[p] ?? ""}:${chatSummaries[p].preview ?? ""}`
     )
     .join("|");
-  if (signature === lastChatListSignature) return;
+  if (signature === lastChatListSignature) {
+    updateActiveChatItem();
+    return;
+  }
   lastChatListSignature = signature;
 
   chatList.innerHTML = "";
@@ -2415,6 +2512,7 @@ function renderChatList() {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (const partner of partners) {
     const s = chatSummaries[partner];
     const item = document.createElement("div");
@@ -2475,8 +2573,9 @@ function renderChatList() {
         openConversation(partner);
       }
     });
-    chatList.appendChild(item);
+    fragment.appendChild(item);
   }
+  chatList.appendChild(fragment);
 }
 
 // A new/updated message arrived while we're not inside that conversation:
@@ -2506,6 +2605,7 @@ function updateChatSummaryFor(msg) {
 
 // ---------- User search ----------
 let searchDebounce = null;
+let searchSeq = 0;
 
 // Usernames are 5–10 characters (see validateUsername). Only search once a
 // full username could actually have been typed — partial/mid-typing input
@@ -2516,6 +2616,7 @@ userSearch.addEventListener("input", () => {
   clearTimeout(searchDebounce);
   const term = userSearch.value.trim().toLowerCase();
   if (term.length < USERNAME_MIN_LENGTH) {
+    searchSeq++;
     hideSearchResults();
     return;
   }
@@ -2523,12 +2624,14 @@ userSearch.addEventListener("input", () => {
 });
 
 async function runUserSearch(term) {
+  const seq = ++searchSeq;
   const { data, error } = await supabaseClient
     .from("profiles")
     .select("id, display_name, username, public_key")
     .eq("username", term)
     .neq("id", currentUser.id)
     .limit(10);
+  if (seq !== searchSeq) return;
   if (error) return console.error(error);
 
   searchResults.innerHTML = "";
@@ -2582,6 +2685,11 @@ chatsScreen.addEventListener("click", (e) => {
 
 // ---------- Load message history (current conversation) ----------
 async function loadMessages(includeMessageId = null) {
+  const partnerAtStart = currentPartner;
+  const userAtStart = currentUser?.id;
+  if (!partnerAtStart || !userAtStart) return;
+  const seq = ++conversationLoadSeq;
+
   // Order newest-first so limit(200) keeps the most recent 200 messages,
   // then reverse back to oldest-first for rendering. Ordering ascending
   // before the limit (the old behavior) kept the OLDEST 200 messages in any
@@ -2590,9 +2698,10 @@ async function loadMessages(includeMessageId = null) {
   const { data, error } = await supabaseClient
     .from("messages")
     .select("*")
-    .or(`and(sender_id.eq.${currentUser.id},recipient_id.eq.${currentPartner}),and(sender_id.eq.${currentPartner},recipient_id.eq.${currentUser.id})`)
+    .or(`and(sender_id.eq.${userAtStart},recipient_id.eq.${partnerAtStart}),and(sender_id.eq.${partnerAtStart},recipient_id.eq.${userAtStart})`)
     .order("created_at", { ascending: false })
     .limit(200);
+  if (seq !== conversationLoadSeq || currentPartner !== partnerAtStart) return;
   if (error) return console.error(error);
 
   const messages = data || [];
@@ -2608,10 +2717,11 @@ async function loadMessages(includeMessageId = null) {
       .select("*")
       .eq("id", includeMessageId)
       .maybeSingle();
+    if (seq !== conversationLoadSeq || currentPartner !== partnerAtStart) return;
 
     const targetBelongsToConversation = target &&
-      ((target.sender_id === currentUser.id && target.recipient_id === currentPartner) ||
-       (target.sender_id === currentPartner && target.recipient_id === currentUser.id));
+      ((target.sender_id === userAtStart && target.recipient_id === partnerAtStart) ||
+       (target.sender_id === partnerAtStart && target.recipient_id === userAtStart));
 
     if (!targetError && targetBelongsToConversation) {
       messages.push(target);
@@ -2620,10 +2730,42 @@ async function loadMessages(includeMessageId = null) {
     }
   }
 
+  // Pre-populate messageCache for any quoted messages older than the 200-row
+  // window so reply previews show the original author and text instead of a
+  // generic fallback.
+  const loadedIds = new Set(messages.map((m) => m.id));
+  const missingReplyIds = [
+    ...new Set(
+      messages
+        .map((m) => m.reply_to)
+        .filter((id) => id && !loadedIds.has(id) && !messageCache[id])
+    ),
+  ];
+  if (missingReplyIds.length > 0) {
+    const { data: quotedRows } = await supabaseClient
+      .from("messages")
+      .select("*")
+      .in("id", missingReplyIds);
+    if (seq !== conversationLoadSeq || currentPartner !== partnerAtStart) return;
+    if (quotedRows && quotedRows.length > 0) {
+      const decryptedQuotes = await Promise.all(quotedRows.map((r) => CircleCrypto.decryptRow(r)));
+      if (seq !== conversationLoadSeq || currentPartner !== partnerAtStart) return;
+      for (const q of decryptedQuotes) {
+        if (
+          (q.sender_id === userAtStart && q.recipient_id === partnerAtStart) ||
+          (q.sender_id === partnerAtStart && q.recipient_id === userAtStart)
+        ) {
+          messageCache[q.id] = q;
+        }
+      }
+    }
+  }
+
   // The targeted message may be much older than the normal history window, so
   // sort after adding it to keep the chronological message order intact.
   messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  await renderAllMessages(messages);
+  const rendered = await renderAllMessages(messages, seq);
+  if (!rendered) return;
 
   // Always open the conversation at the newest message. scrollTop is set
   // directly (no smooth scroll), so the latest message is simply what's on
@@ -2645,25 +2787,36 @@ async function loadMessages(includeMessageId = null) {
   updateJumpBottom();
 }
 
-async function renderAllMessages(data) {
+async function renderAllMessages(data, expectedSeq = conversationLoadSeq) {
   // Decrypt every row first (no-op for legacy plaintext rows) so rows render
   // in order with plaintext bodies, and messageCache holds decrypted views
   // for later quotes. Encrypted photos start downloading/decrypting inside
   // renderMessage; the row itself is placed synchronously here.
   const views = await Promise.all(data.map((row) => CircleCrypto.decryptRow(row)));
+  if (expectedSeq !== conversationLoadSeq) return false;
   // Batch render of existing history: no per-row entry animation (see the
   // .animate-in rule in index.html) — otherwise the whole list visibly
   // flickers up whenever it re-renders after a refresh.
   suppressEntryAnimation = true;
   clearMessageList();
-  views.forEach(renderMessage);
+  const fragment = document.createDocumentFragment();
+  for (const view of views) {
+    renderMessage(view, fragment);
+  }
+  messageList.appendChild(fragment);
   suppressEntryAnimation = false;
+  return true;
 }
 
 let suppressEntryAnimation = false;
 
 function clearMessageList() {
   messageList.innerHTML = "";
+  for (const url of activeBlobUrls) {
+    URL.revokeObjectURL(url);
+  }
+  activeBlobUrls.clear();
+  pendingOutgoingByBody = [];
   // #jump-bottom lives outside this list now (see index.html), so wiping
   // the messages can't destroy it.
   lastRenderedSenderId = null;
@@ -2702,7 +2855,14 @@ settingsOverlay.addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
+  if (e.key !== "Escape") return;
+  if (!settingsOverlay.classList.contains("hidden")) {
+    closeSettings();
+  } else if (!searchResults.classList.contains("hidden")) {
+    hideSearchResults();
+  } else if (replyingTo) {
+    cancelReply();
+  }
 });
 settingsName.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
@@ -2761,24 +2921,20 @@ settingsSave.addEventListener("click", async () => {
 });
 
 async function refreshMessageNames() {
-  // Called after a self-rename, which can happen from the chats list too —
-  // no conversation open means nothing to re-render there.
-  if (!currentPartner) {
-    renderChatList();
-    return;
+  // Patch any visible name labels in place without re-fetching or rebuilding
+  // the message list (which would reset image blobs and flicker scroll).
+  renderChatListIfVisible();
+  if (!currentPartner || !currentUser) return;
+  const myId = currentUser.id;
+  const myName = profileCache[myId] || "Someone";
+  for (const row of messageList.querySelectorAll(".msg-row")) {
+    const msg = messageCache[row.dataset.msgId];
+    if (!msg) continue;
+    if (msg.sender_id === myId) {
+      const nameEl = row.querySelector(".sender-name");
+      if (nameEl) nameEl.textContent = myName;
+    }
   }
-  // Same filtered query as loadMessages: re-rendering must only ever draw
-  // the open conversation, not rows from the user's other chats.
-  const { data, error } = await supabaseClient
-    .from("messages")
-    .select("*")
-    .or(`and(sender_id.eq.${currentUser.id},recipient_id.eq.${currentPartner}),and(sender_id.eq.${currentPartner},recipient_id.eq.${currentUser.id})`)
-    .order("created_at", { ascending: false })
-    .limit(200);
-  if (error) return console.error(error);
-  const scrollTop = messageList.scrollTop;
-  await renderAllMessages(data.reverse());
-  messageList.scrollTop = Math.min(scrollTop, messageList.scrollHeight);
 }
 
 function truncate(str, n) {
@@ -2862,16 +3018,32 @@ function buildMessagesChannel() {
       { event: "UPDATE", schema: "public", table: "messages" },
       (payload) => {
         const msg = payload.new;
-        if (!msg.seen_at || payload.old.seen_at) return;
+        if (!msg.seen_at || payload.old?.seen_at) return;
+        if (messageCache[msg.id]) messageCache[msg.id].seen_at = msg.seen_at;
         const row = messageRowById[msg.id];
         if (row) {
           const tick = row.querySelector(".tick");
           if (tick) {
             tick.innerHTML = TICK_SVG_DOUBLE;
             tick.classList.add("seen");
+            tick.classList.remove("pending");
           }
         }
-        if (msg.sender_id === currentUser.id) updateChatSummaryFor(msg);
+        if (msg.sender_id === currentUser.id) {
+          const s = chatSummaries[msg.recipient_id];
+          if (s && s.last && s.last.id === msg.id) {
+            s.last.seen_at = msg.seen_at;
+            renderChatListIfVisible();
+          } else {
+            updateChatSummaryFor(msg);
+          }
+        } else if (msg.recipient_id === currentUser.id) {
+          const s = chatSummaries[msg.sender_id];
+          if (s && s.unread > 0) {
+            s.unread = Math.max(0, s.unread - 1);
+            renderChatListIfVisible();
+          }
+        }
       }
     )
     // Rows deleted server-side (the admin deleted the other participant and
@@ -2884,10 +3056,7 @@ function buildMessagesChannel() {
         const id = payload.old?.id;
         if (!id) return;
         const row = messageRowById[id];
-        if (row) {
-          if (lastRowElement === row) lastRowElement = null;
-          row.remove();
-        }
+        if (row) cleanupRemovedRow(row);
         delete messageRowById[id];
         delete messageCache[id];
         for (const partner of Object.keys(chatSummaries)) {
@@ -2970,14 +3139,11 @@ function buildPresenceChannel() {
   return channel;
 }
 
-// Repaints everything presence affects: the open conversation's header dot
-// and the chats list (whose render signature includes online state, so a
-// change actually repaints).
+// Repaints the open conversation's header online dot.
 function renderPresence() {
   if (partnerPresence) {
     partnerPresence.classList.toggle("hidden", !(currentPartner && onlineUsers.has(currentPartner)));
   }
-  renderChatListIfVisible();
 }
 
 // Mobile has no hover, so the dot's "Online" tooltip needs a touch path:
@@ -3017,18 +3183,6 @@ function attachTipHold(el) {
   });
 }
 
-// A standalone dot element for chats-list rows (the header's dot is static
-// markup in index.html).
-function makePresenceDot() {
-  const dot = document.createElement("span");
-  dot.className = "presence-dot";
-  dot.dataset.tip = "Online";
-  dot.setAttribute("role", "img");
-  dot.setAttribute("aria-label", "Online");
-  attachTipHold(dot);
-  return dot;
-}
-
 attachTipHold(partnerPresence);
 
 // Coalesces bursts of message DELETEs (a whole conversation wiped at once)
@@ -3044,6 +3198,23 @@ function handleIncomingMessage(msg) {
   const mine = msg.sender_id === currentUser.id;
   const isOpenConversation = currentPartner !== null &&
     (mine ? msg.recipient_id === currentPartner : msg.sender_id === currentPartner);
+
+  // If Realtime delivers our own insert before the HTTP .insert().select()
+  // response resolves, bind it to the matching pending optimistic bubble
+  // in-place instead of rendering a second bubble.
+  if (mine && isOpenConversation && !messageRowById[msg.id] && pendingOutgoingByBody.length > 0) {
+    const idx = pendingOutgoingByBody.findIndex(
+      (p) =>
+        p.recipient_id === msg.recipient_id &&
+        (p.media_path ? p.media_path === msg.media_path : p.body === msg.body)
+    );
+    if (idx !== -1) {
+      const pendingMsg = pendingOutgoingByBody.splice(idx, 1)[0];
+      resolvePendingMessage(pendingMsg, msg);
+      updateChatSummaryFor(pendingMsg);
+      return;
+    }
+  }
 
   // Own messages are already shown the instant they're sent (see the
   // composer's optimistic render below) — when Realtime's echo of that same
@@ -3166,11 +3337,13 @@ function dayLabel(date) {
 
   if (isSameDay(d, now)) return "Today";
   if (isSameDay(d, yesterday)) return "Yesterday";
-  return d.toLocaleDateString([], { month: "long", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+  return d.getFullYear() !== now.getFullYear()
+    ? LONG_DATE_YEAR_FORMATTER.format(d)
+    : LONG_DATE_FORMATTER.format(d);
 }
 
 // ---------- Render a message bubble ----------
-function renderMessage(msg) {
+function renderMessage(msg, targetContainer = messageList) {
   const mine = msg.sender_id === currentUser?.id;
   const msgDay = new Date(msg.created_at).toDateString();
 
@@ -3180,7 +3353,7 @@ function renderMessage(msg) {
     const divider = document.createElement("div");
     divider.className = "day-divider";
     divider.textContent = dayLabel(msg.created_at);
-    messageList.appendChild(divider);
+    targetContainer.appendChild(divider);
     lastRenderedDay = msgDay;
     lastRenderedSenderId = null; // force a fresh group after a day divider
   }
@@ -3253,9 +3426,13 @@ function renderMessage(msg) {
       // Encrypted photos: fetch + decrypt asynchronously, then fill in src
       // (the URL on its own is just ciphertext). The click opens the
       // decrypted blob when we have one, the ciphertext file otherwise.
-      if (msg._mk) {
+      if (msg._localBlobUrl) {
+        img.src = msg._localBlobUrl;
+        msg._blobUrl = msg._localBlobUrl;
+      } else if (msg._mk) {
         CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi, msg.media_type).then((url) => {
           if (url) {
+            trackBlobUrl(url);
             img.src = url;
             msg._blobUrl = url;
           } else {
@@ -3283,6 +3460,7 @@ function renderMessage(msg) {
         link.textContent = "🔒 Attachment";
         CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi, msg.media_type).then((url) => {
           if (url) {
+            trackBlobUrl(url);
             link.href = url;
             msg._blobUrl = url;
           }
@@ -3301,7 +3479,7 @@ function renderMessage(msg) {
   const meta = document.createElement("span");
   meta.className = "meta";
   const timeText = document.createElement("span");
-  timeText.textContent = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
+  timeText.textContent = TIME_FORMATTER.format(new Date(msg.created_at));
   meta.appendChild(timeText);
   if (mine) {
     const tick = document.createElement("span");
@@ -3344,7 +3522,7 @@ function renderMessage(msg) {
   // from it, not over it — avoids overlap on both mine and theirs rows.
   row.appendChild(bubble);
   row.appendChild(replyBtn);
-  messageList.appendChild(row);
+  targetContainer.appendChild(row);
   attachSwipeToReply(row, bubble, replyBtn, msg, mine);
 
   lastRenderedSenderId = msg.sender_id;
@@ -3616,12 +3794,79 @@ function hideComposerError() {
 }
 
 // ---------- Sending ----------
+// Cleans up group classes, orphaned day dividers, and tail state when a row
+// is removed from the DOM (failed optimistic send or server-side DELETE).
+function cleanupRemovedRow(row) {
+  const prev = row.previousElementSibling;
+  const next = row.nextElementSibling;
+  const msg = messageCache[row.dataset.msgId];
+
+  // If the removed row was the last in a consecutive group, restore .group-last
+  // on the preceding row from the same sender so its bubble tail corner returns.
+  if (
+    row.classList.contains("group-last") &&
+    prev &&
+    prev.classList.contains("msg-row") &&
+    msg &&
+    messageCache[prev.dataset.msgId]?.sender_id === msg.sender_id
+  ) {
+    prev.classList.add("group-last");
+  }
+
+  // If the removed row started a group and the next row was grouped under it,
+  // promote the next row to .group-start (and add the sender name if theirs).
+  if (
+    row.classList.contains("group-start") &&
+    next &&
+    next.classList.contains("msg-row") &&
+    next.classList.contains("grouped")
+  ) {
+    next.classList.remove("grouped");
+    next.classList.add("group-start");
+    const nextMsg = messageCache[next.dataset.msgId];
+    if (nextMsg && nextMsg.sender_id !== currentUser?.id) {
+      const nextBubble = next.querySelector(".bubble");
+      if (nextBubble && !nextBubble.querySelector(".sender-name")) {
+        const nameEl = document.createElement("span");
+        nameEl.className = "sender-name";
+        nameEl.textContent = profileCache[nextMsg.sender_id] || "Someone";
+        nextBubble.prepend(nameEl);
+      }
+    }
+  }
+
+  // If removing this row leaves a day-divider with no messages under it,
+  // remove that orphaned divider too.
+  if (
+    prev &&
+    prev.classList.contains("day-divider") &&
+    (!next || next.classList.contains("day-divider"))
+  ) {
+    prev.remove();
+  }
+
+  row.remove();
+
+  // Re-sync tail pointers from whatever is now at the end of messageList.
+  const rows = messageList.querySelectorAll(".msg-row");
+  const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
+  lastRowElement = lastRow;
+  if (lastRow) {
+    const lastMsg = messageCache[lastRow.dataset.msgId];
+    lastRenderedSenderId = lastMsg ? lastMsg.sender_id : null;
+    lastRenderedDay = lastMsg ? new Date(lastMsg.created_at).toDateString() : null;
+  } else {
+    lastRenderedSenderId = null;
+    lastRenderedDay = null;
+  }
+}
+
 // Removes an optimistic bubble that never made it to the server (send failed).
 function removePendingMessage(tempId) {
+  pendingOutgoingByBody = pendingOutgoingByBody.filter((m) => m.id !== tempId);
   const row = messageRowById[tempId];
   if (row) {
-    if (lastRowElement === row) lastRowElement = null;
-    row.remove();
+    cleanupRemovedRow(row);
     delete messageRowById[tempId];
   }
   delete messageCache[tempId];
@@ -3634,6 +3879,7 @@ function removePendingMessage(tempId) {
 // automatically.
 function resolvePendingMessage(optimisticMsg, realMsg) {
   const tempId = optimisticMsg.id;
+  pendingOutgoingByBody = pendingOutgoingByBody.filter((m) => m.id !== tempId);
   const pendingRow = messageRowById[tempId];
   delete messageCache[tempId];
   delete messageRowById[tempId];
@@ -3642,7 +3888,7 @@ function resolvePendingMessage(optimisticMsg, realMsg) {
     // Realtime's echo of this same insert already rendered it first (rare
     // race) — drop the now-redundant optimistic bubble instead of showing
     // the message twice.
-    if (pendingRow) pendingRow.remove();
+    if (pendingRow) cleanupRemovedRow(pendingRow);
     return;
   }
 
@@ -3661,10 +3907,23 @@ function resolvePendingMessage(optimisticMsg, realMsg) {
   }
 }
 
+// Prevent tapping the Send button from blurring the input on mobile, so the
+// virtual keyboard stays open smoothly between consecutive messages.
+const sendButton = document.getElementById("send-button");
+if (sendButton) {
+  sendButton.addEventListener("pointerdown", (e) => {
+    if (document.activeElement === messageInput) e.preventDefault();
+  });
+  sendButton.addEventListener("mousedown", (e) => {
+    if (document.activeElement === messageInput) e.preventDefault();
+  });
+}
+
 composer.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = messageInput.value.trim();
-  if (!text) return;
+  const targetPartner = currentPartner;
+  if (!text || !targetPartner || !currentUser) return;
   const replyId = replyingTo?.id || null;
   messageInput.value = "";
   hideComposerError();
@@ -3676,7 +3935,7 @@ composer.addEventListener("submit", async (e) => {
   const optimisticMsg = {
     id: tempId,
     sender_id: currentUser.id,
-    recipient_id: currentPartner,
+    recipient_id: targetPartner,
     body: text,
     media_path: null,
     media_type: null,
@@ -3685,6 +3944,7 @@ composer.addEventListener("submit", async (e) => {
     seen_at: null,
     _pending: true,
   };
+  pendingOutgoingByBody.push(optimisticMsg);
   renderMessage(optimisticMsg);
   scrollToBottom();
   // Keep the chats-list preview in sync from the instant the bubble appears,
@@ -3698,7 +3958,7 @@ composer.addEventListener("submit", async (e) => {
   let rowBody = text;
   let notify = null;
   if (CircleCrypto.ready()) {
-    const enc = await CircleCrypto.encryptOutgoing(currentPartner, { b: text, mk: null, mi: null }, text);
+    const enc = await CircleCrypto.encryptOutgoing(targetPartner, { b: text, mk: null, mi: null }, text);
     if (enc) {
       rowBody = enc.body;
       notify = enc.notify;
@@ -3709,7 +3969,7 @@ composer.addEventListener("submit", async (e) => {
     .from("messages")
     .insert({
       sender_id: currentUser.id,
-      recipient_id: currentPartner,
+      recipient_id: targetPartner,
       body: rowBody,
       reply_to: replyId,
       ...(notify ? { notify } : {}),
@@ -3801,7 +4061,8 @@ attachButton.addEventListener("click", () => attachInput.click());
 attachInput.addEventListener("change", async () => {
   const file = attachInput.files[0];
   attachInput.value = "";
-  if (!file) return;
+  const targetPartner = currentPartner;
+  if (!file || !targetPartner || !currentUser) return;
   hideComposerError();
 
   // The picker filters to images via accept="image/*", but that's a hint,
@@ -3811,6 +4072,7 @@ attachInput.addEventListener("change", async () => {
     return;
   }
 
+  const replyId = replyingTo?.id || null;
   const upload = await compressImage(file);
 
   if (upload.size > MAX_UPLOAD_BYTES) {
@@ -3818,8 +4080,29 @@ attachInput.addEventListener("change", async () => {
     return;
   }
 
-  const replyId = replyingTo?.id || null;
   const path = `${currentUser.id}/${Date.now()}-${upload.name}`;
+  const localPreviewUrl = trackBlobUrl(URL.createObjectURL(upload));
+  const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const optimisticMsg = {
+    id: tempId,
+    sender_id: currentUser.id,
+    recipient_id: targetPartner,
+    body: null,
+    media_path: path,
+    media_type: upload.type,
+    reply_to: replyId,
+    created_at: new Date().toISOString(),
+    seen_at: null,
+    _pending: true,
+    _localBlobUrl: localPreviewUrl,
+  };
+  pendingOutgoingByBody.push(optimisticMsg);
+  if (currentPartner === targetPartner) {
+    renderMessage(optimisticMsg);
+    scrollToBottom();
+  }
+  updateChatSummaryFor(optimisticMsg);
+
   // E2EE: encrypt the image bytes with a one-off AES key before upload —
   // Storage only ever holds ciphertext. The key travels inside the encrypted
   // message payload below.
@@ -3837,6 +4120,7 @@ attachInput.addEventListener("change", async () => {
     .upload(path, uploadData);
   if (uploadError) {
     console.error(uploadError);
+    removePendingMessage(tempId);
     showComposerError("Couldn't upload the image — check your connection and try again.");
     return; // no message row was created, so the reply context can stay put
   }
@@ -3844,29 +4128,37 @@ attachInput.addEventListener("change", async () => {
   let rowBody = null;
   let notify = null;
   if (CircleCrypto.ready() && mk) {
-    const enc = await CircleCrypto.encryptOutgoing(currentPartner, { b: null, mk, mi }, "📷 Photo");
+    const enc = await CircleCrypto.encryptOutgoing(targetPartner, { b: null, mk, mi }, "📷 Photo");
     if (enc) {
       rowBody = enc.body;
       notify = enc.notify;
     }
   }
 
-  const { error } = await supabaseClient
+  const { data, error } = await supabaseClient
     .from("messages")
     .insert({
       sender_id: currentUser.id,
-      recipient_id: currentPartner,
+      recipient_id: targetPartner,
       body: rowBody,
       media_path: path,
       media_type: upload.type,
       reply_to: replyId,
       ...(notify ? { notify } : {}),
-    });
+    })
+    .select()
+    .single();
   if (error) {
     console.error(error);
+    removePendingMessage(tempId);
     showComposerError("The image uploaded, but the message couldn't be sent. Try attaching it again.");
   } else {
-    cancelReply();
+    resolvePendingMessage(optimisticMsg, data);
+    optimisticMsg.body = null;
+    optimisticMsg._mk = mk;
+    optimisticMsg._mi = mi;
+    updateChatSummaryFor(optimisticMsg);
+    if (currentPartner === targetPartner) cancelReply();
   }
 });
 

@@ -24,9 +24,20 @@ function idbOpen() {
 async function idbGet(key) {
   const db = await idbOpen();
   return new Promise((resolve, reject) => {
-    const req = db.transaction("kv").objectStore("kv").get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    const tx = db.transaction("kv", "readonly");
+    const req = tx.objectStore("kv").get(key);
+    tx.oncomplete = () => {
+      db.close();
+      resolve(req.result);
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
   });
 }
 
@@ -56,6 +67,8 @@ function concatBytes(...parts) {
 }
 
 const NOTIFY_INFO = "circle-notify-v1";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 // notify = base64(JSON { spk: sender public key, d: base64(iv || ct) })
 // The message preview was encrypted by the sender's client to THIS device's
@@ -71,19 +84,19 @@ async function decryptNotify(notifyB64) {
   const myPubRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pubKey));
   const myPubB64 = b64(myPubRaw);
 
-  const { spk, d } = JSON.parse(new TextDecoder().decode(unb64(notifyB64)));
+  const { spk, d } = JSON.parse(decoder.decode(unb64(notifyB64)));
   const peerRaw = unb64(spk);
   const peer = await crypto.subtle.importKey("raw", peerRaw, { name: "ECDH", namedCurve: "P-256" }, false, []);
   const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: peer }, priv, 256));
   const [p1, p2] = myPubB64 < b64(peerRaw) ? [myPubRaw, peerRaw] : [peerRaw, myPubRaw];
   const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", concatBytes(shared, p1, p2, new TextEncoder().encode(NOTIFY_INFO)))
+    await crypto.subtle.digest("SHA-256", concatBytes(shared, p1, p2, encoder.encode(NOTIFY_INFO)))
   );
   const key = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
 
   const blob = unb64(d);
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) }, key, blob.slice(12));
-  return JSON.parse(new TextDecoder().decode(plain)).b || null;
+  return JSON.parse(decoder.decode(plain)).b || null;
 }
 
 // Show a notification when a push arrives — unless the chat is already
@@ -134,7 +147,7 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(
-    self.clients.matchAll({ type: "window" }).then((clients) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ("focus" in client) return client.focus();
       }
