@@ -56,12 +56,18 @@ async function handleNotify(request, env, ctx) {
   // Simple shared-secret check so random people on the internet can't
   // trigger pushes. Supabase's webhook sends this header value back.
   const secret = request.headers.get("x-notify-secret");
-  if (secret !== env.NOTIFY_SECRET) {
+  if (!env.NOTIFY_SECRET || secret !== env.NOTIFY_SECRET) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const payload = await request.json();
-  const message = payload.record; // the newly inserted row, from Supabase's webhook
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (e) {
+    return new Response("Bad request", { status: 400 });
+  }
+
+  const message = payload?.record; // the newly inserted row, from Supabase's webhook
 
   if (!message || !message.sender_id || !message.recipient_id) {
     return new Response("Bad request", { status: 400 });
@@ -80,28 +86,43 @@ async function handleNotify(request, env, ctx) {
 }
 
 async function deliverPushes(message, env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
+
   const headers = {
     apikey: env.SUPABASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
     "Content-Type": "application/json",
   };
 
+  const senderIdParam = encodeURIComponent(message.sender_id);
+  const recipientIdParam = encodeURIComponent(message.recipient_id);
+
   // Sender's name and the recipient's device list are independent — fetch
   // them in one parallel round trip instead of back-to-back awaits.
   const [senderRes, subsRes] = await Promise.all([
-    fetch(`${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${message.sender_id}&select=display_name`, { headers }),
-    fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?user_id=eq.${message.recipient_id}`, { headers }),
+    fetch(`${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${senderIdParam}&select=display_name`, { headers }),
+    fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?user_id=eq.${recipientIdParam}`, { headers }),
   ]);
 
   let senderName = "Someone";
   try {
-    const senderRows = await senderRes.json();
-    senderName = senderRows[0]?.display_name || "Someone";
+    if (senderRes.ok) {
+      const senderRows = await senderRes.json();
+      if (Array.isArray(senderRows) && senderRows[0]?.display_name) {
+        senderName = senderRows[0].display_name;
+      }
+    }
   } catch (e) {}
+
   let subscriptions = [];
   try {
-    subscriptions = await subsRes.json();
+    if (subsRes.ok) {
+      const parsed = await subsRes.json();
+      if (Array.isArray(parsed)) subscriptions = parsed;
+    }
   } catch (e) {}
+
+  if (subscriptions.length === 0) return;
 
   const vapid = {
     subject: env.VAPID_SUBJECT,
@@ -125,6 +146,7 @@ async function deliverPushes(message, env) {
 
   await Promise.allSettled(
     subscriptions.map(async (sub) => {
+      if (!sub?.endpoint || !sub?.p256dh || !sub?.auth) return;
       const subscription = {
         endpoint: sub.endpoint,
         keys: { p256dh: sub.p256dh, auth: sub.auth },
@@ -134,10 +156,13 @@ async function deliverPushes(message, env) {
 
       // 404/410 means the subscription is dead — clean it up
       if (res.status === 404 || res.status === 410) {
-        await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`, {
-          method: "DELETE",
-          headers,
-        });
+        await fetch(
+          `${env.SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`,
+          {
+            method: "DELETE",
+            headers,
+          }
+        );
       }
     })
   );
