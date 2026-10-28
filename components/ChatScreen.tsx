@@ -310,11 +310,14 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
             <BackIcon />
           </svg>
         </button>
-        <div className="chat-header-info">
+        {/* data-tip lives on this wrapper, not the title span itself:
+            .chat-title's overflow:hidden (name truncation) would clip the
+            ::after tooltip bubble entirely — the wrapper has no clipping,
+            and anchoring below it avoids covering the typing indicator. */}
+        <div className="chat-header-info" data-tip={partnerTip ?? undefined}>
           <span
             className="chat-title"
             id="chat-partner-name"
-            data-tip={partnerTip ?? undefined}
             onTouchStart={onNameTouchStart}
             onTouchEnd={onNameTouchEnd}
           >

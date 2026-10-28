@@ -326,7 +326,8 @@ html.kb-following-scroll .screen {
 /* ---------- Custom hover tooltips ----------
    Native title= tooltips are replaced by a styled ::after bubble on any
    element carrying a data-tip attribute (header icon buttons, the chat
-   header's partner name): rounded, theme-aware, appearing a short grace
+   header's name/info block — the tip sits on the wrapper because the title
+   itself clips its own overflow): rounded, theme-aware, appearing a short grace
    period after the cursor settles so sweeping across the header buttons
    doesn't pop a tooltip for every button merely passed over (that, plus the
    slow hover fade above, is what read as "stuttery"). background/border/
