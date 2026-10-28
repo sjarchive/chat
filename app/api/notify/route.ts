@@ -1,58 +1,42 @@
+// POST /api/notify — push-notification relay (port of the old Worker's
+// handleNotify/deliverPushes). Supabase's database webhook calls this on
+// every new message; it fans the (already E2EE-encrypted) notification
+// payload out to the recipient's registered devices.
+//
+// Runtime env/secrets come from the Cloudflare bindings via the OpenNext
+// adapter (wrangler secrets in production, .dev.vars in local dev), and
+// background delivery uses waitUntil so the webhook gets an instant
+// response.
+
 import { buildPushPayload } from "@block65/webcrypto-web-push";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/api/notify" && request.method === "POST") {
-      return handleNotify(request, env, ctx);
-    }
-
-    // Everything else: serve the static PWA files.
-    return env.ASSETS.fetch(request);
-  },
-
-  // Cron trigger (see wrangler.jsonc `triggers.crons`).
-  // Supabase pauses Free Plan projects that do not receive a few database
-  // queries each day over a 7-day rolling window. Running every 6 hours
-  // (4x/day) and querying multiple tables keeps Postgres actively engaged.
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil(pingSupabase(env));
-  },
-};
-
-async function pingSupabase(env) {
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Worker environment.");
-  }
-
-  const headers = {
-    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    "Cache-Control": "no-cache",
-    Prefer: "count=exact",
-  };
-
-  // Query both tables in parallel so each scheduled run generates multiple
-  // uncached PostgREST -> Postgres queries every 6 hours (8 DB queries/day).
-  const endpoints = [
-    `${env.SUPABASE_URL}/rest/v1/profiles?select=id&limit=1`,
-    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?select=endpoint&limit=1`,
-  ];
-
-  const responses = await Promise.all(
-    endpoints.map((endpoint) => fetch(endpoint, { headers }))
-  );
-
-  for (const res of responses) {
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Supabase keep-alive query failed (${res.status}): ${body}`);
-    }
-  }
+interface CloudflareEnv {
+  SUPABASE_URL?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  NOTIFY_SECRET?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 }
 
-async function handleNotify(request, env, ctx) {
+interface NotifyContext {
+  env: CloudflareEnv;
+  ctx: { waitUntil(promise: Promise<unknown>): void };
+}
+
+interface SubRow {
+  endpoint?: string;
+  p256dh?: string;
+  auth?: string;
+}
+
+export async function POST(request: Request): Promise<Response> {
+  const { env, ctx } = getCloudflareContext() as unknown as NotifyContext;
+  return handleNotify(request, env, ctx);
+}
+
+async function handleNotify(request: Request, env: CloudflareEnv, ctx: NotifyContext["ctx"]): Promise<Response> {
   // Simple shared-secret check so random people on the internet can't
   // trigger pushes. Supabase's webhook sends this header value back.
   const secret = request.headers.get("x-notify-secret");
@@ -63,7 +47,7 @@ async function handleNotify(request, env, ctx) {
   let payload;
   try {
     payload = await request.json();
-  } catch (e) {
+  } catch {
     return new Response("Bad request", { status: 400 });
   }
 
@@ -85,7 +69,7 @@ async function handleNotify(request, env, ctx) {
   });
 }
 
-async function deliverPushes(message, env) {
+async function deliverPushes(message: { sender_id?: string; recipient_id?: string; notify?: string | null }, env: CloudflareEnv) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
 
   const headers = {
@@ -94,8 +78,8 @@ async function deliverPushes(message, env) {
     "Content-Type": "application/json",
   };
 
-  const senderIdParam = encodeURIComponent(message.sender_id);
-  const recipientIdParam = encodeURIComponent(message.recipient_id);
+  const senderIdParam = encodeURIComponent(message.sender_id ?? "");
+  const recipientIdParam = encodeURIComponent(message.recipient_id ?? "");
 
   // Sender's name and the recipient's device list are independent — fetch
   // them in one parallel round trip instead of back-to-back awaits.
@@ -112,15 +96,15 @@ async function deliverPushes(message, env) {
         senderName = senderRows[0].display_name;
       }
     }
-  } catch (e) {}
+  } catch {}
 
-  let subscriptions = [];
+  let subscriptions: SubRow[] = [];
   try {
     if (subsRes.ok) {
       const parsed = await subsRes.json();
       if (Array.isArray(parsed)) subscriptions = parsed;
     }
-  } catch (e) {}
+  } catch {}
 
   if (subscriptions.length === 0) return;
 
@@ -149,6 +133,7 @@ async function deliverPushes(message, env) {
       if (!sub?.endpoint || !sub?.p256dh || !sub?.auth) return;
       const subscription = {
         endpoint: sub.endpoint,
+        expirationTime: null,
         keys: { p256dh: sub.p256dh, auth: sub.auth },
       };
       const requestInit = await buildPushPayload(pushMessage, subscription, vapid);
@@ -156,13 +141,10 @@ async function deliverPushes(message, env) {
 
       // 404/410 means the subscription is dead — clean it up
       if (res.status === 404 || res.status === 410) {
-        await fetch(
-          `${env.SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`,
-          {
-            method: "DELETE",
-            headers,
-          }
-        );
+        await fetch(`${env.SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`, {
+          method: "DELETE",
+          headers,
+        });
       }
     })
   );

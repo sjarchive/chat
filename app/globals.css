@@ -1,0 +1,1039 @@
+﻿* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  /* Suppresses the default mobile blue/gray tap-highlight box that Chrome
+     and Safari flash on any tappable element when it's tapped. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+:root {
+  --bg: #0E1116;
+  --surface: #1B2028;
+  --surface-2: #232A34;
+  --mine-bg: #1F6F5C;
+  --mine-text: #FFFFFF;
+  --theirs-bg: #232A34;
+  --theirs-text: #E9EDF1;
+  --text: #E9EDF1;
+  --text-dim: #6B7480;
+  --accent: #E0A72E;
+  --accent-text: #1B1300;
+  --danger: #C4574B;
+  --border: #232A34;
+  /* Desktop two-pane divider: needs more contrast than --border in light
+     mode, where #E9EDEF sits invisibly between the white panes. */
+  --pane-divider: #232A34;
+}
+
+/* WhatsApp-style light theme */
+[data-theme="light"] {
+  --bg: #ECE5DD;
+  --surface: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --mine-bg: #DCF8C6;
+  --mine-text: #111B21;
+  --theirs-bg: #FFFFFF;
+  --theirs-text: #111B21;
+  --text: #111B21;
+  --text-dim: #667781;
+  --accent: #00A884;
+  --accent-text: #FFFFFF;
+  --danger: #C4574B;
+  --border: #E9EDEF;
+  --pane-divider: #D1D7DB;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent mobile pull-to-refresh / viewport rubber-banding from dragging the app shell */
+  overscroll-behavior: none;
+  /* Telegram-ish default scale: everything in rem/em below inherits this */
+  font-size: 16.5px;
+}
+
+button,
+.chat-item,
+.search-result,
+.quoted-msg,
+.media-file {
+  touch-action: manipulation;
+}
+
+/* ---------- Text selection policy ----------
+   Selection is disabled sitewide: on touch devices an accidental
+   touch-and-hold (or a finger that drifts a few px while tapping) makes the
+   browser run its selection drag and flash a blue highlight over headers,
+   list rows, buttons, etc. Setting it on <html> covers every descendant,
+   because user-select:auto (the default) resolves to the parent's used
+   value. Elements below opt back in explicitly. -webkit-touch-callout:none
+   also suppresses the iOS long-press callout sheet outside the chat. */
+html {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Form controls must stay fully editable/selectable â€” on iOS an inherited
+   user-select:none can otherwise make an input impossible to type into. */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+/* Message text stays selectable so users can hold/copy important info.
+   The supporting furniture inside a bubble opts back out â€” a selection
+   starting on the message text must not swallow it:
+   .meta        â€” the time + tick row
+   .sender-name â€” the author label above the text
+   .quoted-msg  â€” the reply preview; to copy the original, tap it to jump
+                  to the source message and select there */
+.bubble {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+.bubble .meta,
+.bubble .sender-name,
+.bubble .quoted-msg {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Slim, unobtrusive scrollbars (Telegram-style) */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(127,127,127,0.55); }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(127,127,127,0.35) transparent; }
+
+/* Smooth light/dark cross-fade: the theme swaps CSS variables on <html>, and
+   variables themselves can't animate â€” but the properties consuming them do,
+   when the element has a transition for them. Rule order matters: every
+   element gets these theme-property transitions by default; rules that need
+   a different transition (html/body below, .reply-trigger, .jump-bottomâ€¦)
+   come later or carry higher specificity, so they still win. */
+@media (prefers-reduced-motion: no-preference) {
+  * {
+    transition: background-color 0.3s ease, color 0.3s ease,
+                border-color 0.3s ease;
+    /* box-shadow deliberately NOT transitioned: in light theme every message
+       bubble carries a box-shadow, so animating it re-renders (not just
+       repaints) hundreds of bubbles per frame inside a long conversation â€”
+       that's what made the toggle stutter on the chat screen. The shadow
+       now swaps instantly instead of fading, which is imperceptible. */
+  }
+  html, body { transition: background-color 0.3s ease, color 0.3s ease; }
+}
+
+.hidden { display: none !important; }
+.hidden-field { display: none; }
+
+/* ---------- Fade in / fade out ----------
+   JS's showEl()/hideEl() drive these: hideEl() adds .fade-out (opacity
+   transition runs while the element is still rendered), then swaps in
+   .hidden once it completes; showEl() reveals with .fade-out pre-applied
+   and removes it next frame so the element transitions in. */
+/* background/color kept from the universal theme cross-fade rule, which this
+   more specific transition property list would otherwise override. */
+/* transform is transitioned (briefly) so a step change of --app-offset-top â€”
+   the keyboard pinning offset on browsers that scroll instead of resize â€”
+   eases in instead of jumping the whole screen by a few pixels in one frame. */
+.screen { transition: opacity 0.18s ease, transform 0.15s ease, background-color 0.3s ease, color 0.3s ease; }
+/* While the keyboard is already open and the browser is only scrolling the
+   visual viewport to reveal a newly focused field (auth form: name â†’
+   username â†’ password), the pinning offset changes without the keyboard
+   itself moving. Easing those steps animated the whole screen against the
+   browser's own viewport movement â€” a visible stutter on every field
+   switch â€” so follow them instantly by dropping just the transform
+   transition. script.js toggles this class on html. */
+html.kb-following-scroll .screen {
+  transition: opacity 0.18s ease, background-color 0.3s ease, color 0.3s ease;
+}
+/* Screens live in normal flow, so during a cross-fade the outgoing one must
+   overlay instead of stacking (two 100dvh blocks would double the page
+   height). Fixed + inset:0 lifts it out of flow for the fade's duration. */
+.screen.fade-out { position: fixed; inset: 0; z-index: 50; }
+
+.search-results,
+.settings-overlay,
+.reply-preview,
+.composer-error,
+.typing-indicator {
+  transition: opacity 0.18s ease, transform 0.18s ease,
+              background-color 0.3s ease, border-color 0.3s ease;
+}
+.fade-out { opacity: 0 !important; pointer-events: none; }
+/* Popovers settle upward/outward when appearing, reverse when leaving. */
+.search-results.fade-out { transform: translateY(-6px); }
+/* The settle-scale belongs on the CARD, never the overlay: scaling the
+   overlay shrinks the backdrop rectangle away from the screen edges, which
+   shows the dim as a grey rectangle with visible boundaries while it fades.
+   The card shrinking slightly reads as the dialog "settling" instead. */
+.settings-overlay.fade-out .settings-card { transform: scale(0.98); }
+.reply-preview.fade-out { transform: translateY(100%); }
+.composer-error.fade-out { transform: translateY(100%); }
+.jump-bottom { transition: opacity 0.18s ease, transform 0.18s ease, filter 0.15s ease, background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
+.jump-bottom.fade-out { transform: translateY(8px); }
+
+.screen { height: 100dvh; height: calc(var(--app-height, 100dvh)); display: flex; flex-direction: column; position: relative; transform: translateY(var(--app-offset-top, 0px)); }
+
+/* ---------- Auth ---------- */
+/* The auth screen opts OUT of the keyboard-pinning translateY (.screen applies
+   it via --app-offset-top) AND out of document flow entirely. With the
+   keyboard open, tapping between the fields makes the browser scroll to
+   reveal the newly focused input; while the screen was in normal flow it
+   scrolled the whole <html> document for a frame and snapped back â€” the
+   millisecond whole-screen jerk on every field switch. position:fixed leaves
+   the page underneath with nothing to scroll, so only this container can
+   move: overflow-y:auto + margin:auto centering let the browser's native
+   focus-scroll reveal any field inside the card smoothly. The chat composer
+   still needs the pinning; the auth form never did. */
+#auth-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  align-items: center;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  transform: none;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.auth-card { width: 100%; max-width: 380px; text-align: center; margin: auto; }
+
+.auth-title { font-size: 36px; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 4px; }
+.auth-sub { color: var(--text-dim); font-size: 15px; margin-bottom: 28px; }
+
+#auth-form { display: flex; flex-direction: column; gap: 11px; }
+
+#auth-form input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.3s ease;
+}
+#auth-form input:focus { border-color: var(--accent); }
+
+#auth-submit {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 6px;
+}
+#auth-submit:hover { filter: brightness(1.05); }
+#auth-submit:active { opacity: 0.85; }
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 14px;
+  margin-top: 18px;
+  cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; }
+
+.auth-error { color: var(--danger); font-size: 13px; margin-top: 12px; min-height: 16px; }
+
+/* ---------- Chat ---------- */
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.chat-header-info { display: flex; flex-direction: column; min-width: 0; }
+.chat-title {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The chat screen's own header (partner name) sits directly above the
+   encryption notice, so it's trimmed to a slimmer bar rather than the
+   chats-list header's full-size padding/type. */
+#chat-screen .chat-header {
+  padding: max(6px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 6px max(14px, env(safe-area-inset-left));
+}
+#chat-screen .chat-header .icon-button { padding: 6px; font-size: 17px; }
+#chat-screen .chat-title { font-size: 16px; }
+#chat-screen .chat-sub { font-size: 12px; }
+
+.header-actions { display: flex; align-items: center; gap: 2px; }
+
+/* The chat screen's header now only has the back button + the partner's
+   name (the per-chat theme toggle was removed) â€” space-between would push
+   the name all the way to the far right with nothing to balance it, so this
+   screen's header left-aligns its two items instead of spreading them. The
+   chats-list screen's header still uses space-between above, since its two
+   items (title, header-actions) are meant to sit at opposite edges. */
+#chat-screen .chat-header { justify-content: flex-start; }
+
+.icon-button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 19px;
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+.icon-button:hover { color: var(--text); background: rgba(127,127,127,0.12); }
+.icon-button:active { background: rgba(127,127,127,0.2); }
+.icon-button svg { display: block; }
+
+/* Snappier hover feedback: the universal theme cross-fade rule at the top of
+   the stylesheet also transitions background-color over 0.3s, which made the
+   small icon buttons' hover highlight fade in/out slowly enough to feel
+   laggy. Keep the slow theme fade for border-color, speed up the rest. */
+.icon-button {
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.3s ease;
+}
+
+/* ---------- Custom hover tooltips ----------
+   Native title= tooltips are replaced by a styled ::after bubble on any
+   element carrying a data-tip attribute (header icon buttons, the chat
+   header's partner name): rounded, theme-aware, appearing a short grace
+   period after the cursor settles so sweeping across the header buttons
+   doesn't pop a tooltip for every button merely passed over (that, plus the
+   slow hover fade above, is what read as "stuttery"). background/border/
+   color are re-listed so this rule's transition doesn't drop the theme
+   cross-fade the universal rule provides. */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-3px);
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 30;
+  transition: opacity 0.15s ease, transform 0.15s ease,
+              background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  /* The grace period: hover-in waits ~half a second; hover-out uses the base
+     rule's 0 delay, so the bubble leaves as soon as the cursor moves on. */
+  transition-delay: 0.45s, 0.45s, 0s, 0s, 0s;
+}
+
+/* ---------- Presence (online dot) ----------
+   A green dot appears next to a user's name while their app is connected
+   (see buildPresenceChannel in script.js). Shown in the open conversation's
+   header and on every chats-list row; carries a styled "Online" tooltip. */
+.presence-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22C55E;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+  flex-shrink: 0;
+}
+/* Header dot pins to the header's right edge (the screen's flex-start
+   override would otherwise hug it next to the name); list rows group it
+   with the timestamp on the top line instead of letting it float beside
+   the info block, where it visually unseats the time from the edge. */
+#chat-screen .chat-header .presence-dot { margin-left: auto; }
+.chat-item-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* Mobile has no hover: a long-press (~450ms) adds .tip-on via attachTipHold()
+   in script.js to show the same tooltip bubble instantly â€” the JS wait
+   replaces the hover grace period â€” and it lingers briefly after the finger
+   lifts so it can actually be read. */
+[data-tip].tip-on::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Dots pinned to a row's right edge (chats list) anchor the bubble to the
+   same edge: centering it under the dot would push most of the bubble past
+   the screen edge, where the scroll container clips it. */
+[data-tip].tip-edge::after {
+  left: auto;
+  right: 0;
+  transform: translateY(-3px);
+}
+[data-tip].tip-edge:hover::after,
+[data-tip].tip-edge:focus-visible::after,
+[data-tip].tip-edge.tip-on::after {
+  transform: translateY(0);
+}
+
+/* ---------- Encryption notice (top of every conversation) ---------- */
+.encryption-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 14px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.encryption-notice svg { flex-shrink: 0; opacity: 0.75; }
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px max(14px, env(safe-area-inset-right)) 16px max(14px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: relative;
+}
+
+.msg-row {
+  display: flex;
+  margin-bottom: 2px;
+  contain: layout style;
+}
+.msg-row.grouped { margin-bottom: 2px; }
+.msg-row.group-start { margin-top: 10px; }
+.msg-row.mine { justify-content: flex-end; }
+.msg-row.theirs { justify-content: flex-start; }
+
+.bubble {
+  max-width: min(74%, 440px);
+  padding: 9px 13px;
+  border-radius: 14px;
+  font-size: 16px;
+  line-height: 1.4;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 1px rgba(11, 20, 26, 0.14);
+}
+.mine .bubble { background: var(--mine-bg); color: var(--mine-text); }
+.theirs .bubble { background: var(--theirs-bg); color: var(--theirs-text); }
+
+/* Tighten the tail-corner only on the last bubble of a consecutive group */
+.msg-row.mine.group-last .bubble { border-bottom-right-radius: 6px; }
+.msg-row.theirs.group-last .bubble { border-bottom-left-radius: 6px; }
+
+[data-theme="light"] .bubble { box-shadow: 0 1px 1px rgba(11, 20, 26, 0.13); }
+[data-theme="dark"] .bubble { box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.3); }
+
+.bubble .sender-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.bubble .meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  margin-top: 3px;
+}
+.theirs .bubble .meta { color: var(--text-dim); }
+[data-theme="light"] .mine .bubble .meta { color: rgba(17,27,33,0.55); }
+
+.bubble .meta .tick { display: inline-flex; }
+.bubble .meta .tick svg { height: 15px; width: auto; display: block; }
+.bubble .meta .tick.seen { color: #53BDEB; }
+.bubble .meta .tick.pending { opacity: 0.5; }
+
+.bubble img.media {
+  max-width: 100%;
+  border-radius: 10px;
+  display: block;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.media-file {
+  display: block;
+  margin-bottom: 4px;
+  padding: 9px 13px;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.15);
+  color: inherit;
+  text-decoration: none;
+  font-size: 15px;
+}
+
+/* ---------- Reply-to ---------- */
+.msg-row { align-items: flex-end; }
+
+.reply-trigger {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  padding: 0; /* padding only appears when revealed â€” border-box can't shrink below its own padding, so a fixed padding here would keep reserving space even at width:0 */
+  width: 0; /* collapsed at rest â€” reserves no space, so bubbles stay flush to the edge */
+  min-width: 0; /* flex items default to min-width:auto, which ignores width:0 when there's content */
+  overflow: hidden;
+  opacity: 0; /* revealed by hover (desktop) or swipe (mobile, via JS) */
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent; /* no blue flash on tap/long-press */
+  /* width/padding/opacity drive the swipe reveal; background-color/color are
+     added so this rule's transition list doesn't override (and thus drop) the
+     theme cross-fade the universal * rule sets for everything else. */
+  transition: width 0.18s ease, padding 0.18s ease, opacity 0.15s ease,
+              background-color 0.3s ease, color 0.3s ease;
+}
+.reply-trigger:focus { outline: none; }
+.reply-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Desktop / mouse: reveal on hover over the row */
+@media (hover: hover) and (pointer: fine) {
+  /* "mine" rows: put the icon before the bubble visually (DOM order stays
+     the same, so mobile's swipe/overlap logic isn't affected) so the
+     bubble â€” not the icon â€” is the item anchored to the row's edge, and
+     stays put on hover instead of shifting left. */
+  .msg-row.mine .reply-trigger { order: -1; }
+
+  .msg-row:hover .reply-trigger { width: 34px; padding: 6px; opacity: 0.55; }
+  .reply-trigger:hover { opacity: 1; }
+}
+
+/* Touch devices: no hover affordance, so make the tap target bigger */
+@media (hover: none) and (pointer: coarse) {
+  .reply-trigger { font-size: 26px; }
+}
+
+/* Desktop click feedback: bubble + icon nudge left together, then settle
+   back, so clicking the reply icon reads as a deliberate little "punch"
+   rather than an instant no-op. Transform-based (not the flex reflow used
+   at rest) so it applies the same way to mine and theirs rows. */
+@keyframes reply-bounce {
+  0% { transform: translateX(0); }
+  35% { transform: translateX(-8px); }
+  100% { transform: translateX(0); }
+}
+.msg-row.reply-bounce .bubble,
+.msg-row.reply-bounce .reply-trigger {
+  animation: reply-bounce 0.22s ease;
+}
+
+/* Let JS own horizontal swipe gestures while still allowing normal vertical scroll. */
+.bubble { touch-action: pan-y; }
+
+.quoted-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-left: 3px solid var(--accent);
+  background: rgba(127, 127, 127, 0.15);
+  border-radius: 6px;
+  padding: 5px 9px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.quoted-msg:hover { background: rgba(127, 127, 127, 0.22); }
+.quoted-name { font-size: 13px; font-weight: 600; color: var(--accent); }
+.quoted-body {
+  font-size: 14px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mine .quoted-body { color: rgba(255,255,255,0.75); }
+[data-theme="light"] .mine .quoted-body { color: rgba(17,27,33,0.6); }
+
+/* Outlined rather than box-shadowed: bubbles already carry their own
+   (theme- and side-dependent) box-shadow, so animating box-shadow would
+   override it and end on "none", making the flash pop differently on
+   mine-vs-theirs bubbles and per theme. An outline draws on top of whatever
+   the bubble has, so the flash looks identical everywhere. */
+.msg-row.highlight-flash .bubble {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  animation: flash 1.2s ease-out;
+}
+@keyframes flash {
+  0% { outline-color: var(--accent); }
+  100% { outline-color: transparent; }
+}
+
+.reply-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  flex-shrink: 0;
+}
+.reply-preview-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.reply-preview-name { font-size: 13px; font-weight: 600; color: var(--accent); }
+.reply-preview-text {
+  font-size: 14px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day-divider {
+  align-self: center;
+  color: var(--text);
+  background: rgba(127, 127, 127, 0.18);
+  border-radius: 13px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 14px 0 8px;
+}
+
+.typing-indicator {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* ---------- Chats list ---------- */
+#back-button { margin-right: 4px; }
+
+.search-bar {
+  position: relative;
+  padding: 8px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#user-search {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 11px 17px;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.3s ease;
+}
+#user-search:focus { border-color: var(--accent); }
+
+.search-results {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: calc(100% - 6px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.3);
+  z-index: 20;
+  overflow: hidden;
+}
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 11px 15px;
+  cursor: pointer;
+}
+.search-result:hover, .search-result:active { background: var(--surface-2); }
+.search-result-name { font-size: 16px; }
+.search-result-username { font-size: 13px; color: var(--text-dim); }
+.search-empty { padding: 11px 15px; font-size: 14px; color: var(--text-dim); }
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px max(5px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left));
+}
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  contain: layout style;
+}
+.chat-item:hover { filter: brightness(1.04); }
+.chat-item:active { filter: brightness(0.96); }
+/* Desktop two-pane: the conversation currently open in the right pane is
+   highlighted in the list (JS toggles .active via updateActiveChatItem). */
+.chat-item.active { background: var(--surface-2); border-color: var(--accent); }
+.chat-item-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.chat-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.chat-item-name {
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chat-item-time { font-size: 13px; color: var(--text-dim); flex-shrink: 0; }
+.chat-item-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.chat-item-preview {
+  font-size: 14px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-item-preview .tick {
+  margin-right: 4px;
+  color: var(--text-dim);
+  display: inline-flex;
+  vertical-align: -2px;
+}
+.chat-item-preview .tick svg { height: 13px; width: auto; display: block; }
+.chat-item-preview .tick.seen { color: #53BDEB; }
+
+.chat-item-badge {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: 12px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.chat-list-empty {
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+
+/* ---------- Placeholder (right pane, desktop only) ---------- */
+/* Hidden everywhere by default; the desktop media query below shows it while
+   no conversation is open. */
+#chat-placeholder {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--text-dim);
+  font-size: 15px;
+  background: var(--surface-2);
+  /* Fades in via the shared .fade-out mechanism (script.js removes the class
+     the frame after the placeholder is revealed, once a conversation closes). */
+  transition: opacity 0.18s ease, background-color 0.3s ease;
+}
+#chat-placeholder svg { opacity: 0.45; }
+
+/* ---------- Desktop two-pane layout (WhatsApp/Telegram style) ----------
+   On wide screens the chats list becomes a permanently visible left pane and
+   the conversation opens in the right pane; below the breakpoint nothing
+   changes and the original one-screen-at-a-time flow is untouched.
+
+   Everything here is scoped to html.app-visible (set by enterApp, removed
+   when the user is signed out) so the overrides can't leak onto the auth
+   screen. The right pane's visibility is driven by html.chat-open, which JS
+   mirrors from openConversation()/closeConversation(). The mobile
+   .hidden/.fade-out screen switching keeps running underneath â€” on desktop
+   the overrides here simply neutralize it for the list pane (so hiding it
+   while a chat opens can't blank the left side), while the right pane keeps
+   using it as-is. */
+@media (min-width: 768px) {
+  html.app-visible .app-layout {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    height: 100dvh;
+    height: calc(var(--app-height, 100dvh));
+    transform: translateY(var(--app-offset-top, 0px));
+  }
+  html.app-visible .app-layout .screen { height: 100%; transform: none; }
+
+  /* Left pane: always visible. The !important overrides beat the mobile
+     .hidden / .fade-out rules that openConversation() still applies to it. */
+  html.app-visible #chats-screen {
+    display: flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    flex: 0 0 30%;
+    min-width: 320px;
+    max-width: 420px;
+    border-right: 1px solid var(--pane-divider);
+  }
+
+  html.app-visible #chat-screen { flex: 1; min-width: 0; }
+
+  /* While a screen fades out, the mobile rules lift it out of flow with
+     position:fixed inset:0 â€” on desktop that would stretch the fading
+     conversation across BOTH panes, blanking the chats list for the fade's
+     duration. Keep fading screens as normal flex panes instead: each one
+     simply fades out in place, exactly like before the two-pane layout. */
+  html.app-visible .screen.fade-out { position: relative; inset: auto; z-index: auto; }
+
+  /* Right pane only exists while a chat is open; otherwise the placeholder
+     fills the space. During the pre-JS flash-prevention window on a refresh
+     inside a chat, the has-session CSS force-shows #chat-screen (higher
+     specificity), so .has-open-chat is excluded here to keep the placeholder
+     and the conversation from showing side by side in that brief moment. */
+  html.app-visible:not(.chat-open) #chat-screen { display: none !important; }
+  html.app-visible:not(.chat-open):not(.has-open-chat) #chat-placeholder { display: flex; }
+}
+
+.jump-bottom {
+  position: absolute;
+  right: 16px;
+  /* Anchored to .composer-stack: bottom:100% floats the button directly
+     above the stack's top edge â€” above the reply strip (and its âœ•) when a
+     reply is active, above the input bar otherwise. The 10px gap keeps it
+     clear of the strip's shadow/edge. */
+  bottom: 100%;
+  margin-bottom: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 5;
+}
+.jump-bottom:hover { filter: brightness(1.08); }
+#jump-bottom-count:empty { display: none; }
+
+/* ---------- Composer ---------- */
+/* Wraps reply-preview + composer-error + composer so the jump-bottom button
+   can anchor to the stack's top edge: when the reply strip opens, the stack
+   grows upward and carries the button with it, keeping the button above the
+   âœ• instead of on top of it. */
+.composer-stack {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.composer-error {
+  padding: 6px 16px;
+  font-size: 14px;
+  color: var(--danger);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px max(10px, env(safe-area-inset-right)) max(9px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#message-input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 22px;
+  padding: 12px 17px;
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.3s ease;
+}
+#message-input:focus { border-color: var(--accent); }
+[data-theme="light"] #message-input { border: 1px solid var(--border); }
+[data-theme="light"] #message-input:focus { border-color: var(--accent); }
+
+.send-button {
+  background: var(--accent);
+  border: none;
+  color: var(--accent-text);
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+.send-button:hover { filter: brightness(1.05); }
+.send-button:active { opacity: 0.85; transform: scale(0.95); }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Only on rows arriving live while the chat is open (.animate-in is added
+     by JS). Applying it to .msg-row itself made the ENTIRE history replay the
+     animation whenever it was re-rendered â€” most visibly right after a page
+     refresh, where the whole list visibly flickered/jittered into place. */
+  .msg-row.animate-in { animation: rise 0.15s ease-out; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Settings modal ---------- */
+.settings-overlay {
+  position: fixed;
+  /* Sized from --app-height (kept in sync with the screens by script.js)
+     instead of inset-bottom, so the dialog re-centers inside the keyboard-
+     shrunken visible area in the same frame the composer moves â€” tracking
+     the layout viewport instead let the two move a frame apart, which read
+     as a one-off jitter while the keyboard animated. */
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--app-height, 100dvh));
+  transform: translateY(var(--app-offset-top, 0px));
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 10;
+  /* No transform transition: the keyboard-pinning translateY above must track
+     the screens instantly (their transform eases briefly instead). Opacity
+     still fades; the settle-scale lives on .settings-card below. */
+  transition: opacity 0.18s ease, background-color 0.3s ease, border-color 0.3s ease;
+}
+.settings-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  transition: transform 0.18s ease, background-color 0.3s ease, border-color 0.3s ease;
+}
+.settings-card h2 { font-size: 20px; font-weight: 600; margin-bottom: 14px; }
+.settings-label { display: block; font-size: 14px; color: var(--text-dim); margin-bottom: 6px; }
+.settings-hint { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
+#settings-name {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 14px;
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.3s ease;
+}
+#settings-name:focus { border-color: var(--accent); }
+.settings-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 16px; }
+.settings-actions .link-button { margin-top: 0; }
+#settings-save {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 12px;
+  padding: 11px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#settings-save:hover { filter: brightness(1.05); }
+#settings-save:active { opacity: 0.85; }
+#settings-save:disabled { opacity: 0.6; cursor: default; }
+
+/* ---------- Auth-screen password toggle (page-specific) ---------- */
+.password-field { position: relative; width: 100%; }
+  .password-field #auth-password { padding-right: 48px; width: 100%; box-sizing: border-box; }
+  .password-toggle {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    width: 36px; height: 36px; padding: 0; border: 0; background: transparent;
+    color: inherit; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0.75;
+  }
+  .password-toggle:hover, .password-toggle:focus-visible { opacity: 1; }
+  .password-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 6px; }
+
+  /* Paired with the has-session class set in the head script above: applies
+     as soon as these elements are inserted, before script.js finishes its
+     real auth check, so refreshing while logged in never shows a flash of the
+     auth screen. !important matches .hidden's own specificity.
+     When a conversation was open (has-open-chat), pre-paint the chat screen
+     instead of the chats list, so refreshing inside a chat stays in that
+     chat instead of flashing the list before script.js switches screens. */
+  html.has-session #auth-screen { display: none !important; }
+  html.has-session:not(.has-open-chat) #chats-screen.hidden { display: flex !important; }
+  html.has-session.has-open-chat #chat-screen.hidden { display: flex !important; }

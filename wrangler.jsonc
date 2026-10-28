@@ -1,12 +1,23 @@
+// Cloudflare Workers config for the Next.js app (OpenNext adapter).
+// `name` is deliberately the same as the old Worker ("chat") so deploying
+// replaces it and the Supabase webhook URL keeps working unchanged.
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "chat",
+  "main": "worker.ts",
   "compatibility_date": "2026-09-01",
-  "main": "worker.js",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": "./public",
+    "directory": "./.open-next/assets",
     "binding": "ASSETS"
   },
   "triggers": {
     "crons": ["0 */6 * * *"]
+  },
+  "observability": {
+    "enabled": true
   }
+  // SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / NOTIFY_SECRET / VAPID_* are
+  // secrets: they stay in .dev.vars locally and are set on the deployed
+  // Worker with `wrangler secret put …` (see README).
 }
