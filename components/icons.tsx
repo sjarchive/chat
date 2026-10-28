@@ -1,5 +1,3 @@
-"use client";
-
 // Shared inline SVGs — the same icon paths the original app used, rendered
 // as React elements instead of innerHTML strings where practical. The tick
 // SVGs stay as strings (they're data-driven paths reused in two places).

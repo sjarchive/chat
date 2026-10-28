@@ -1,17 +1,23 @@
-// POST /api/notify — push-notification relay (port of the old Worker's
-// handleNotify/deliverPushes). Supabase's database webhook calls this on
-// every new message; it fans the (already E2EE-encrypted) notification
-// payload out to the recipient's registered devices.
+// Cloudflare Worker — the whole deployed program. Two jobs:
 //
-// Runtime env/secrets come from the Cloudflare bindings via the OpenNext
-// adapter (wrangler secrets in production, .dev.vars in local dev), and
-// background delivery uses waitUntil so the webhook gets an instant
-// response.
+//   1. fetch — serve the Vite-built single-page app (assets-first routing:
+//      anything matching a file in dist/ is served directly by the platform,
+//      everything else falls through to here and gets the app shell), plus
+//      POST /api/notify — the push-notification relay (port of the old
+//      Worker's handleNotify/deliverPushes; Supabase's database webhook calls
+//      it on every new message and it fans the already-E2EE-encrypted
+//      notification payload out to the recipient's registered devices).
+//   2. scheduled — the Supabase keep-alive cron.
+//
+// Runtime env/secrets come from the Cloudflare bindings (wrangler secrets in
+// production, .dev.vars in local dev), and background delivery uses waitUntil
+// so the webhook gets an instant response.
 
 import { buildPushPayload } from "@block65/webcrypto-web-push";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 
-interface CloudflareEnv {
+interface Env {
+  /** Static assets binding — the built client in dist/. */
+  ASSETS: { fetch(request: Request): Promise<Response> };
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   NOTIFY_SECRET?: string;
@@ -20,9 +26,8 @@ interface CloudflareEnv {
   VAPID_SUBJECT?: string;
 }
 
-interface NotifyContext {
-  env: CloudflareEnv;
-  ctx: { waitUntil(promise: Promise<unknown>): void };
+interface ScheduledContext {
+  waitUntil(promise: Promise<void>): void;
 }
 
 interface SubRow {
@@ -31,12 +36,24 @@ interface SubRow {
   auth?: string;
 }
 
-export async function POST(request: Request): Promise<Response> {
-  const { env, ctx } = getCloudflareContext() as unknown as NotifyContext;
-  return handleNotify(request, env, ctx);
-}
+export default {
+  async fetch(request: Request, env: Env, ctx: ScheduledContext): Promise<Response> {
+    const { pathname } = new URL(request.url);
+    if (pathname === "/api/notify") return handleNotify(request, env, ctx);
+    // Any other path serves the single-page app shell.
+    return env.ASSETS.fetch(new Request(new URL("/", request.url)));
+  },
 
-async function handleNotify(request: Request, env: CloudflareEnv, ctx: NotifyContext["ctx"]): Promise<Response> {
+  // Cron trigger (see wrangler.jsonc `triggers.crons`).
+  // Supabase pauses Free Plan projects that do not receive a few database
+  // queries each day over a 7-day rolling window. Running every 6 hours
+  // (4x/day) and querying multiple tables keeps Postgres actively engaged.
+  async scheduled(_controller: unknown, env: Env, ctx: ScheduledContext) {
+    ctx.waitUntil(pingSupabase(env));
+  },
+};
+
+async function handleNotify(request: Request, env: Env, ctx: ScheduledContext): Promise<Response> {
   // Simple shared-secret check so random people on the internet can't
   // trigger pushes. Supabase's webhook sends this header value back.
   const secret = request.headers.get("x-notify-secret");
@@ -69,7 +86,7 @@ async function handleNotify(request: Request, env: CloudflareEnv, ctx: NotifyCon
   });
 }
 
-async function deliverPushes(message: { sender_id?: string; recipient_id?: string; notify?: string | null }, env: CloudflareEnv) {
+async function deliverPushes(message: { sender_id?: string; recipient_id?: string; notify?: string | null }, env: Env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return;
 
   const headers = {
@@ -148,4 +165,33 @@ async function deliverPushes(message: { sender_id?: string; recipient_id?: strin
       }
     })
   );
+}
+
+async function pingSupabase(env: Env): Promise<void> {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Worker environment.");
+  }
+
+  const headers = {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    "Cache-Control": "no-cache",
+    Prefer: "count=exact",
+  };
+
+  // Query both tables in parallel so each scheduled run generates multiple
+  // uncached PostgREST -> Postgres queries every 6 hours (8 DB queries/day).
+  const endpoints = [
+    `${env.SUPABASE_URL}/rest/v1/profiles?select=id&limit=1`,
+    `${env.SUPABASE_URL}/rest/v1/push_subscriptions?select=endpoint&limit=1`,
+  ];
+
+  const responses = await Promise.all(endpoints.map((endpoint) => fetch(endpoint, { headers })));
+
+  for (const res of responses) {
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Supabase keep-alive query failed (${res.status}): ${body}`);
+    }
+  }
 }

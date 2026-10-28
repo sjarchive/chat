@@ -1,5 +1,3 @@
-"use client";
-
 // ---------- Keep layout height accurate when the mobile keyboard opens/closes ----------
 // visualViewport fires resize AND scroll in bursts while the keyboard animates.
 // Applying each event immediately would write the CSS vars — and re-layout the

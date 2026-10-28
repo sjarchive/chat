@@ -1,20 +1,19 @@
 {
-  "name": "chat-next",
+  "name": "chat",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite build && wrangler dev",
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "^2.0.0",
-    "@opennextjs/cloudflare": "^1.20.13",
     "@supabase/supabase-js": "^2.118.0",
     "mediabunny": "^1.62.1",
-    "next": "16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -23,7 +22,9 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
     "typescript": "^5",
+    "vite": "^7",
     "wrangler": "^4.154.0"
   },
   "allowScripts": {

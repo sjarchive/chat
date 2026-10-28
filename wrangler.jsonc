@@ -1,14 +1,15 @@
-// Cloudflare Workers config for the Next.js app (OpenNext adapter).
-// `name` is deliberately the same as the old Worker ("chat") so deploying
+// Cloudflare Workers config — Vite + React + TypeScript single-page app,
+// with this worker handling POST /api/notify and the Supabase keep-alive cron.
+// `name` is deliberately the same as the previous Worker ("chat") so deploying
 // replaces it and the Supabase webhook URL keeps working unchanged.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "chat",
-  "main": "worker.ts",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": "./.open-next/assets",
+    "directory": "./dist",
     "binding": "ASSETS"
   },
   "triggers": {

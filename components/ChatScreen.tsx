@@ -1,5 +1,3 @@
-"use client";
-
 // CHAT SCREEN — conversation header (back / partner name / presence dot /
 // typing indicator), the E2EE notice, the message list with day dividers,
 // and the composer stack (jump-to-bottom, reply preview, error banner,

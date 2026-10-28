@@ -1,5 +1,3 @@
-"use client";
-
 // ChatApp — the app orchestrator, ported from the original single-script
 // vanilla app. All state lives here and flows down to presentational
 // screens; Supabase calls, realtime channel lifecycle, optimistic sends,

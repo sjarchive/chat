@@ -1,5 +1,3 @@
-"use client";
-
 // AUTH SCREEN — sign in / sign up form (presentational; Supabase calls and
 // validation-error state live in ChatApp, exactly like the original script).
 

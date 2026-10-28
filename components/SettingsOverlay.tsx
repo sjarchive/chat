@@ -1,5 +1,3 @@
-"use client";
-
 // SETTINGS MODAL — change display name. Presentational: the save call and
 // error handling contract is onSave(name) → error string or null.
 

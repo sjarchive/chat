@@ -1,5 +1,3 @@
-"use client";
-
 // Fade in / fade out — mirrors the original showEl()/hideEl() helpers.
 // Toggling .hidden alone can't animate: display:none isn't transitional.
 // Hiding keeps the element rendered under .fade-out (see the CSS) and swaps

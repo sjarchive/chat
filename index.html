@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Pre-paint script, byte-identical to the vanilla app's (previously
+         inlined by app/layout.tsx). First element in <head> so the theme
+         attribute and has-session/has-open-chat classes land before the
+         first pixel paints — no flash of the wrong theme or of the barebone
+         auth screen. Real session validation still happens in ChatApp; this
+         only prevents the flash while that check runs. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("circle-theme") || "dark";
+          document.documentElement.setAttribute("data-theme", t);
+          var hasSession = Object.keys(localStorage).some(function (key) {
+            return key.indexOf("sb-") === 0 && key.indexOf("-auth-token") !== -1 && localStorage.getItem(key);
+          });
+          if (hasSession) document.documentElement.classList.add("has-session");
+          // If a conversation was open when the page was last refreshed, mark
+          // that too, so the CSS can pre-paint the chat screen straight away
+          // instead of flashing the chats list first.
+          if (hasSession && sessionStorage.getItem("circle-open-chat")) {
+            document.documentElement.classList.add("has-open-chat");
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>Chat</title>
+    <meta name="description" content="One app. Everyone's in it." />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0E1116" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

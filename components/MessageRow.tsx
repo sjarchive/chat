@@ -1,5 +1,3 @@
-"use client";
-
 // One message bubble + its reply trigger and swipe-to-reply gesture.
 //
 // The swipe/scroll/decrypt behaviors are ports of the original imperative

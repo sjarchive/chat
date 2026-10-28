@@ -1,5 +1,3 @@
-"use client";
-
 // CHATS LIST SCREEN — header (profile / theme / sign out), username search
 // with suggestions, and the conversation list. Presentational: the summaries
 // array is derived in ChatApp; search state lives there too (so the Escape
