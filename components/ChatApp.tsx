@@ -10,7 +10,7 @@ import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabaseClient } from "@/lib/supabase";
 import { CircleCrypto } from "@/lib/crypto";
 import { resetPushState, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
-import { compressImage, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, formatBytes } from "@/lib/media";
+import { compressImage, compressMedia, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, MAX_MEDIA_INPUT_BYTES, formatBytes } from "@/lib/media";
 import { applyTheme, readStoredTheme, type Theme } from "@/lib/theme";
 import { fadeClass, FADE_MS, useFade } from "@/lib/fade";
 import { useViewportHeight } from "@/lib/viewport";
@@ -831,10 +831,23 @@ export default function ChatApp() {
       if (!file || !targetPartner || !user) return;
       hideComposerError();
 
-      // Photos get compressed first; every other kind (video/audio/generic
-      // files) can't be safely re-encoded client-side and uploads as-is.
+      // Everything gets compressed before upload: photos via canvas (JPEG),
+      // video/audio via a WebCodecs re-encode (MP4 — see lib/media.ts).
+      // Generic files are sent as-is: they're either already compressed
+      // losslessly (zip/pdf) or can't be shrunk without corrupting them —
+      // they only get a size cap. Media gets a bigger input cap since it's
+      // compressed before the final upload cap applies.
       const isImage = file.type.startsWith("image/");
-      const upload = isImage ? await compressImage(file) : file;
+      const isVideo = file.type.startsWith("video/");
+      const isAudio = file.type.startsWith("audio/");
+      const isMedia = isImage || isVideo || isAudio;
+      const inputCap = isMedia ? MAX_MEDIA_INPUT_BYTES : MAX_BINARY_UPLOAD_BYTES;
+      if (file.size > inputCap) {
+        showComposerError(`That file is too large — the limit is ${formatBytes(inputCap)}.`);
+        return;
+      }
+
+      const upload = isImage ? await compressImage(file) : isVideo || isAudio ? await compressMedia(file) : file;
 
       // Images are capped after compression (the 2MB post-compress limit);
       // every other kind under a bigger raw cap.
@@ -843,7 +856,7 @@ export default function ChatApp() {
         return;
       }
       if (!isImage && upload.size > MAX_BINARY_UPLOAD_BYTES) {
-        showComposerError(`That file is too large — the limit is ${formatBytes(MAX_BINARY_UPLOAD_BYTES)}.`);
+        showComposerError(`That file is too large even after compression — the limit is ${formatBytes(MAX_BINARY_UPLOAD_BYTES)}.`);
         return;
       }
 

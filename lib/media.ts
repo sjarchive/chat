@@ -8,14 +8,15 @@ const MAX_IMAGE_DIMENSION = 1600; // longest edge, px
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // cap after compression
 const SKIP_COMPRESSION_BELOW_BYTES = 400 * 1024; // already small — not worth re-encoding
 
-// Video/audio/generic files can't be safely compressed client-side (re-encoding
-// video/audio with a canvas + WebAudio isn't practical), so they go up as-is
-// under a larger raw cap. 25MB stays well within the Supabase Storage
-// free-tier per-object limit while allowing a few minutes of audio or a
-// short video clip.
-const MAX_BINARY_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Video/audio are re-encoded (transcoded) before upload too — phone videos
+// are exactly the quota killers. Targets: 720p H.264 + low-quality AAC,
+// which lands a typical clip at a few MB. 25MB stays as the final upload
+// cap for anything that couldn't be compressed (or generic files).
+const MAX_BINARY_UPLOAD_BYTES = 25 * 1024 * 1024; // final cap, post-transcode
+const MAX_MEDIA_INPUT_BYTES = 100 * 1024 * 1024; // input cap before transcoding
+const MAX_VIDEO_HEIGHT = 720; // px, post-transcode (width follows aspect ratio)
 
-export { MAX_IMAGE_DIMENSION, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES };
+export { MAX_IMAGE_DIMENSION, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, MAX_MEDIA_INPUT_BYTES };
 
 // "1.2 MB" — label for file chips. Small units get one decimal, larger round
 // to whole numbers.
@@ -78,6 +79,59 @@ export async function compressImage(file: File): Promise<File> {
     return new File([blob], toJpegFilename(file.name), { type: "image/jpeg" });
   } catch (err) {
     console.error(err);
+    return file;
+  }
+}
+
+// ---------- Video/audio transcode ----------
+// Re-encodes video (→ 720p H.264 + low-quality AAC in an MP4) and audio
+// (→ low-quality AAC in an .m4a) with mediabunny, which drives the browser's
+// native WebCodecs — hardware-accelerated where available, and far smaller
+// and faster than a wasm FFmpeg. Returns the original file untouched
+// whenever transcoding isn't supported (no WebCodecs — older Firefox,
+// missing hardware codecs), the source can't be processed, or the result
+// wouldn't actually be smaller than the original.
+export async function compressMedia(file: File): Promise<File> {
+  let mod: typeof import("mediabunny");
+  try {
+    // Dynamic import keeps the transcoder out of the initial page bundle;
+    // it loads on the first attachment instead.
+    mod = await import("mediabunny");
+  } catch {
+    return file; // chunk failed to load — send as-is
+  }
+
+  try {
+    const input = new mod.Input({ formats: mod.ALL_FORMATS, source: new mod.BlobSource(file) });
+    const output = new mod.Output({
+      format: new mod.Mp4OutputFormat(),
+      target: new mod.BufferTarget(),
+    });
+
+    const isVideo = file.type.startsWith("video/");
+    // Setting `quality` forces a transcode; `height` caps the resolution
+    // with the width deduced from the aspect ratio. `tracks: "primary"`
+    // drops secondary/extra tracks (multi-angle video etc.).
+    const conversion = await mod.Conversion.init({
+      input,
+      output,
+      tracks: "primary",
+      video: isVideo ? { height: MAX_VIDEO_HEIGHT, quality: new mod.Quality("low") } : undefined,
+      audio: { quality: new mod.Quality("low") },
+      tags: {},
+    });
+
+    if (!conversion.isValid) return file;
+    await conversion.execute();
+
+    const buffer = output.target.buffer;
+    if (!buffer || buffer.byteLength === 0 || buffer.byteLength >= file.size) return file;
+
+    const ext = isVideo ? ".mp4" : ".m4a";
+    const mime = isVideo ? "video/mp4" : "audio/mp4";
+    return new File([buffer], file.name.replace(/\.\w+$/, "") + ext, { type: mime });
+  } catch (err) {
+    console.error("Media compression failed — sending original:", err);
     return file;
   }
 }

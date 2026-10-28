@@ -111,7 +111,7 @@ To trial the new worker in parallel instead, change `"name"` in `wrangler.jsonc`
 
 ## Behavior notes
 
-- Attachments: photos are compressed (max 1600px, JPEG, 2MB post-compress cap); video/audio/generic files upload as-is under a 25MB cap. Everything is E2EE — Storage holds only ciphertext, and recipients decrypt to a local blob URL (inline player for video/audio, file chip with the original filename otherwise).
+- Attachments: photos are compressed (max 1600px, JPEG, 2MB post-compress cap); video/audio are transcoded before upload via WebCodecs (`mediabunny` → 720p H.264 + low-quality AAC, MP4/M4A), with a 100MB input cap and 25MB final cap; generic files upload as-is under a 25MB cap. Everything is E2EE — Storage holds only ciphertext, and recipients decrypt to a local blob URL (inline player for video/audio, file chip with the original filename otherwise).
 - `sw.js` is byte-for-byte the original — it still reads the device key from IndexedDB (`circle-e2ee`) and decrypts `messages.notify` previews.
 - The pre-paint `<head>` script from `index.html` now lives in `app/layout.tsx` (no theme/session flash on load).
 - All legacy element ids/classes are kept (`auth-screen`, `chats-screen`, `chat-screen`, `message-list`, `composer`, …) so the verbatim CSS keeps working, including the desktop two-pane layout and keyboard (`--app-height`/`--app-offset-top`) handling.
