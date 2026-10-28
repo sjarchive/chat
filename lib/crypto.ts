@@ -361,15 +361,22 @@ async function encryptFileForSend(file: File): Promise<{ data: Blob; mk: string;
   };
 }
 
-// Fetches ciphertext from Storage and decrypts to an object URL.
-async function decryptMedia(mediaPath: string, mkB64: string, miB64: string, mime: string | null): Promise<string | null> {
+// Fetches ciphertext from Storage and decrypts to an object URL, plus the
+// plaintext size (only the blob knows it — the wire just carries ciphertext).
+async function decryptMedia(
+  mediaPath: string,
+  mkB64: string,
+  miB64: string,
+  mime: string | null
+): Promise<{ url: string; size: number } | null> {
   try {
-    const url = supabaseClient.storage.from("chat-media").getPublicUrl(mediaPath).data.publicUrl;
-    const res = await fetch(url);
+    const publicUrl = supabaseClient.storage.from("chat-media").getPublicUrl(mediaPath).data.publicUrl;
+    const res = await fetch(publicUrl);
     if (!res.ok) return null;
     const key = await crypto.subtle.importKey("raw", unb64(mkB64), { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(miB64) }, key, await res.arrayBuffer());
-    return URL.createObjectURL(new Blob([plain], { type: mime || "application/octet-stream" }));
+    const blob = new Blob([plain], { type: mime || "application/octet-stream" });
+    return { url: URL.createObjectURL(blob), size: blob.size };
   } catch (err) {
     console.error(err);
     return null;

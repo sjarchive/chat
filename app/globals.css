@@ -496,8 +496,29 @@ html.kb-following-scroll .screen {
   cursor: pointer;
 }
 
-.media-file {
+/* Video gets a stable width: without it the bubble reflows twice — once at
+   the 300x150 default box, again when metadata resolves the intrinsic size. */
+.bubble video.media {
+  width: min(260px, 100%);
+  max-width: 100%;
+  border-radius: 10px;
   display: block;
+  margin-bottom: 4px;
+}
+
+/* Audio players keep a platform-native look; a fixed width stops the bubble
+   being squeezed or overflowing on narrow phones. */
+.bubble .media-audio {
+  width: min(240px, 100%);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.media-file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 240px;
   margin-bottom: 4px;
   padding: 9px 13px;
   border-radius: 10px;
@@ -506,6 +527,19 @@ html.kb-following-scroll .screen {
   text-decoration: none;
   font-size: 15px;
 }
+.media-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-file-size {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.theirs .bubble .media-file-size { color: var(--text-dim); }
+[data-theme="light"] .mine .bubble .media-file-size { color: rgba(17, 27, 33, 0.55); }
 
 /* ---------- Reply-to ---------- */
 .msg-row { align-items: flex-end; }

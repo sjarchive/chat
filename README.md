@@ -22,7 +22,7 @@ lib/
   supabase.ts         # client singleton (localStorage sessions, as before)
   crypto.ts           # CircleCrypto — E2EE port
   push.ts             # SW registration + push subscribe/unsubscribe
-  media.ts            # image compression before upload
+  media.ts            # attachment compression/size caps before upload
   theme.tsx, fade.ts, viewport.ts, utils.ts, types.ts
 worker.ts             # custom worker: OpenNext fetch + scheduled keep-alive
 wrangler.jsonc        # worker "chat" (replaces the old one on deploy)
@@ -111,6 +111,7 @@ To trial the new worker in parallel instead, change `"name"` in `wrangler.jsonc`
 
 ## Behavior notes
 
+- Attachments: photos are compressed (max 1600px, JPEG, 2MB post-compress cap); video/audio/generic files upload as-is under a 25MB cap. Everything is E2EE — Storage holds only ciphertext, and recipients decrypt to a local blob URL (inline player for video/audio, file chip with the original filename otherwise).
 - `sw.js` is byte-for-byte the original — it still reads the device key from IndexedDB (`circle-e2ee`) and decrypts `messages.notify` previews.
 - The pre-paint `<head>` script from `index.html` now lives in `app/layout.tsx` (no theme/session flash on load).
 - All legacy element ids/classes are kept (`auth-screen`, `chats-screen`, `chat-screen`, `message-list`, `composer`, …) so the verbatim CSS keeps working, including the desktop two-pane layout and keyboard (`--app-height`/`--app-offset-top`) handling.

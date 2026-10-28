@@ -10,11 +10,12 @@ import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabaseClient } from "@/lib/supabase";
 import { CircleCrypto } from "@/lib/crypto";
 import { resetPushState, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
-import { compressImage, MAX_UPLOAD_BYTES } from "@/lib/media";
+import { compressImage, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, formatBytes } from "@/lib/media";
 import { applyTheme, readStoredTheme, type Theme } from "@/lib/theme";
 import { fadeClass, FADE_MS, useFade } from "@/lib/fade";
 import { useViewportHeight } from "@/lib/viewport";
 import {
+  attachmentPreview,
   clearStoredOpenChat,
   dayLabel,
   getStoredOpenChat,
@@ -22,6 +23,7 @@ import {
   previewText,
   setStoredOpenChat,
   timeLabel,
+  truncate,
   usernameToFakeEmail,
   USERNAME_MIN_LENGTH,
 } from "@/lib/utils";
@@ -829,22 +831,34 @@ export default function ChatApp() {
       if (!file || !targetPartner || !user) return;
       hideComposerError();
 
-      // The picker filters to images via accept="image/*", but that's a
-      // hint, not a guarantee — drag-dropped or re-named files still come
-      // through with a wrong type.
-      if (!file.type.startsWith("image/")) {
-        showComposerError("Only image files can be sent.");
+      // Photos get compressed first; every other kind (video/audio/generic
+      // files) can't be safely re-encoded client-side and uploads as-is.
+      const isImage = file.type.startsWith("image/");
+      const upload = isImage ? await compressImage(file) : file;
+
+      // Images are capped after compression (the 2MB post-compress limit);
+      // every other kind under a bigger raw cap.
+      if (isImage && upload.size > MAX_UPLOAD_BYTES) {
+        showComposerError("That image is too large even after compression — please choose a smaller one.");
+        return;
+      }
+      if (!isImage && upload.size > MAX_BINARY_UPLOAD_BYTES) {
+        showComposerError(`That file is too large — the limit is ${formatBytes(MAX_BINARY_UPLOAD_BYTES)}.`);
         return;
       }
 
       const replyId = replyingToRef.current?.id ?? null;
-      const upload = await compressImage(file);
-      if (upload.size > MAX_UPLOAD_BYTES) {
-        showComposerError("That image is too large even after compression — please choose a smaller one.");
-        return;
-      }
-
       const path = `${user.id}/${Date.now()}-${upload.name}`;
+      // The label is the encrypted row body: push-preview text and what
+      // quotes/summaries show. Generic files carry their filename instead
+      // of a kind emoji.
+      const label = isImage
+        ? "📷 Photo"
+        : file.type.startsWith("video/")
+          ? "🎬 Video"
+          : file.type.startsWith("audio/")
+            ? "🎵 Audio"
+            : `📎 ${truncate(upload.name, 40)}`;
       const localPreviewUrl = trackBlobUrl(URL.createObjectURL(upload));
       const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const optimisticMsg: MessageView = {
@@ -859,6 +873,7 @@ export default function ChatApp() {
         seen_at: null,
         _pending: true,
         _localBlobUrl: localPreviewUrl,
+        _fileSize: upload.size,
       };
       pendingOutgoingRef.current.push(optimisticMsg);
       messageCacheRef.current[tempId] = optimisticMsg;
@@ -868,9 +883,9 @@ export default function ChatApp() {
       }
       updateChatSummaryFor(optimisticMsg);
 
-      // E2EE: encrypt the image bytes with a one-off AES key before upload —
-      // Storage only ever holds ciphertext. The key travels inside the
-      // encrypted message payload below.
+      // E2EE: encrypt the attachment bytes with a one-off AES key before
+      // upload — Storage only ever holds ciphertext. The key travels inside
+      // the encrypted message payload below.
       let uploadData: Blob = upload;
       let mk: string | null = null;
       let mi: string | null = null;
@@ -884,14 +899,14 @@ export default function ChatApp() {
       if (uploadError) {
         console.error(uploadError);
         removePendingMessage(tempId);
-        showComposerError("Couldn't upload the image — check your connection and try again.");
+        showComposerError("Couldn't upload the attachment — check your connection and try again.");
         return; // no message row was created, so the reply context can stay put
       }
 
       let rowBody: string | null = null;
       let notify: string | null = null;
       if (CircleCrypto.ready() && mk) {
-        const enc = await CircleCrypto.encryptOutgoing(targetPartner, { b: null, mk, mi }, "📷 Photo");
+        const enc = await CircleCrypto.encryptOutgoing(targetPartner, { b: null, mk, mi }, label);
         if (enc) {
           rowBody = enc.body;
           notify = enc.notify;
@@ -914,7 +929,7 @@ export default function ChatApp() {
       if (error) {
         console.error(error);
         removePendingMessage(tempId);
-        showComposerError("The image uploaded, but the message couldn't be sent. Try attaching it again.");
+        showComposerError("The attachment uploaded, but the message couldn't be sent. Try attaching it again.");
       } else {
         resolvePendingMessage(optimisticMsg, data as MessageRow);
         optimisticMsg.body = null;

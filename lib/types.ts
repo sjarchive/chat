@@ -35,6 +35,8 @@ export interface MessageView extends MessageRow {
   _mi?: string | null;
   /** Optimistic bubble not yet confirmed by the server. */
   _pending?: boolean;
+  /** Known size in bytes of an attached file (optimistic bubble / after decrypt). */
+  _fileSize?: number | null;
   /** Local object URL of an image being uploaded with this message. */
   _localBlobUrl?: string | null;
   /** Decrypted object URL, set once media decryption resolves. */

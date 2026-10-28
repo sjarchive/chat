@@ -8,7 +8,29 @@ const MAX_IMAGE_DIMENSION = 1600; // longest edge, px
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // cap after compression
 const SKIP_COMPRESSION_BELOW_BYTES = 400 * 1024; // already small — not worth re-encoding
 
-export { MAX_IMAGE_DIMENSION, MAX_UPLOAD_BYTES };
+// Video/audio/generic files can't be safely compressed client-side (re-encoding
+// video/audio with a canvas + WebAudio isn't practical), so they go up as-is
+// under a larger raw cap. 25MB stays well within the Supabase Storage
+// free-tier per-object limit while allowing a few minutes of audio or a
+// short video clip.
+const MAX_BINARY_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+export { MAX_IMAGE_DIMENSION, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES };
+
+// "1.2 MB" — label for file chips. Small units get one decimal, larger round
+// to whole numbers.
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const digits = i === 0 || v >= 100 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[i]}`;
+}
 
 function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {

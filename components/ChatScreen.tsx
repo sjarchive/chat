@@ -22,7 +22,7 @@ import {
 import MessageRow from "./MessageRow";
 import { BackIcon, ICON_ATTRS, LockIcon } from "./icons";
 import { fadeClass, useFade } from "@/lib/fade";
-import { truncate } from "@/lib/utils";
+import { attachmentPreview, truncate } from "@/lib/utils";
 import type { MessageView } from "@/lib/types";
 
 export type DerivedRow =
@@ -377,7 +377,7 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
               {replyingName}
             </span>
             <span id="reply-preview-text" className="reply-preview-text">
-              {replyingTo ? (replyingTo.body ? truncate(replyingTo.body, 80) : replyingTo.media_path ? "📷 Photo" : "") : ""}
+              {replyingTo ? (replyingTo.body ? truncate(replyingTo.body, 80) : replyingTo.media_path ? attachmentPreview(replyingTo.media_type ?? null) : "") : ""}
             </span>
           </div>
           <button type="button" id="reply-preview-cancel" className="icon-button" aria-label="Cancel reply" onClick={onReplyCancel}>
@@ -393,7 +393,14 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
           <button type="button" id="attach-button" className="icon-button" aria-label="Attach media" onClick={() => attachRef.current?.click()}>
             📎
           </button>
-          <input id="attach-input" type="file" accept="image/*" className="hidden-field" ref={attachRef} onChange={onAttachChange} />
+          <input
+            id="attach-input"
+            type="file"
+            accept="image/*,video/*,audio/*,*/*"
+            className="hidden-field"
+            ref={attachRef}
+            onChange={onAttachChange}
+          />
           <input
             id="message-input"
             type="text"

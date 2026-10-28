@@ -42,8 +42,17 @@ export function truncate(str: string, n: number): string {
   return str.length > n ? str.slice(0, n - 1) + "…" : str;
 }
 
-export function previewText(msg: { media_path: string | null; body: string | null }): string {
-  if (msg.media_path) return "📷 Photo";
+// Kind label for a non-text message (photo/video/audio/generic file).
+// Used for the chats-list preview, reply quotes, and push previews.
+export function attachmentPreview(mediaType: string | null): string {
+  if (mediaType?.startsWith("image/")) return "📷 Photo";
+  if (mediaType?.startsWith("video/")) return "🎬 Video";
+  if (mediaType?.startsWith("audio/")) return "🎵 Audio";
+  return "📎 Attachment";
+}
+
+export function previewText(msg: { media_path: string | null; media_type?: string | null; body: string | null }): string {
+  if (msg.media_path) return attachmentPreview(msg.media_type ?? null);
   return msg.body || "";
 }
 

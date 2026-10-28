@@ -10,7 +10,8 @@
 import { memo, useEffect, useRef, useState, type AnimationEvent, type MouseEvent } from "react";
 import { supabaseClient } from "@/lib/supabase";
 import { CircleCrypto } from "@/lib/crypto";
-import { timeText, truncate } from "@/lib/utils";
+import { formatBytes } from "@/lib/media";
+import { attachmentPreview, timeText, truncate } from "@/lib/utils";
 import { Tick } from "./icons";
 import type { MessageView } from "@/lib/types";
 
@@ -58,40 +59,51 @@ function MessageRow({
     openReplyRef.current = onOpenReply;
   });
 
-  const [imgSrc, setImgSrc] = useState<string | undefined>(undefined);
-  const [imgFailed, setImgFailed] = useState(false);
+  const [mediaSrc, setMediaSrc] = useState<string | undefined>(undefined);
+  const [mediaFailed, setMediaFailed] = useState(false);
+  const [fileSize, setFileSize] = useState<number | null>(msg._fileSize ?? null);
   const [linkHref, setLinkHref] = useState<string | null>(null);
   const [quotedBusy, setQuotedBusy] = useState(false);
 
   const isImage = (msg.media_type || "").startsWith("image/");
+  const isVideo = (msg.media_type || "").startsWith("video/");
+  const isAudio = (msg.media_type || "").startsWith("audio/");
+  // image/video/audio render inline; anything else (or a media load that
+  // failed) falls back to the tappable file chip.
+  const playable = isImage || isVideo || isAudio;
+  // The original filename is preserved in the Storage path: "…/1690…-name.ext"
+  const attachmentName = (msg.media_path?.split("/").pop() ?? "").replace(/^\d+-/, "");
   const mediaUrl = msg.media_path
     ? supabaseClient.storage.from("chat-media").getPublicUrl(msg.media_path).data.publicUrl
     : null;
 
-  // Encrypted photos/attachments: fetch + decrypt asynchronously, then fill
+  // Encrypted media/attachments: fetch + decrypt asynchronously, then fill
   // in the src/href (the public URL on its own is just ciphertext). The click
   // opens the decrypted blob when we have one, the ciphertext file otherwise.
   useEffect(() => {
     if (!msg.media_path) return;
     if (msg._localBlobUrl) {
       blobUrlRef.current = msg._localBlobUrl;
-      if (isImage) setImgSrc(msg._localBlobUrl);
+      if (playable) setMediaSrc(msg._localBlobUrl);
       else setLinkHref(msg._localBlobUrl);
       return;
     }
     if (!msg._mk) {
       // Legacy unencrypted attachment
-      if (isImage) setImgSrc(mediaUrl ?? undefined);
+      if (playable) setMediaSrc(mediaUrl ?? undefined);
       else setLinkHref(mediaUrl);
       return;
     }
     let cancelled = false;
-    CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi ?? "", msg.media_type).then((url) => {
-      if (cancelled || !url) return;
-      onMediaDecrypted(url);
-      blobUrlRef.current = url;
-      if (isImage) setImgSrc(url);
-      else setLinkHref(url);
+    CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi ?? "", msg.media_type).then((dec) => {
+      if (cancelled || !dec) return;
+      onMediaDecrypted(dec.url);
+      blobUrlRef.current = dec.url;
+      if (playable) setMediaSrc(dec.url);
+      else {
+        setFileSize(dec.size);
+        setLinkHref(dec.url);
+      }
     });
     return () => {
       cancelled = true;
@@ -276,7 +288,7 @@ function MessageRow({
               <>
                 <span className="quoted-name">{quotedName}</span>
                 <span className="quoted-body">
-                  {quotedMsg.body ? truncate(quotedMsg.body, 80) : quotedMsg.media_path ? "📷 Photo" : ""}
+                  {quotedMsg.body ? truncate(quotedMsg.body, 80) : quotedMsg.media_path ? attachmentPreview(quotedMsg.media_type ?? null) : ""}
                 </span>
               </>
             ) : (
@@ -285,11 +297,11 @@ function MessageRow({
           </div>
         ) : null}
 
-        {msg.media_path && isImage ? (
+        {msg.media_path && isImage && !mediaFailed ? (
           <img
             className="media"
-            alt={imgFailed ? "Photo unavailable" : "Photo"}
-            src={imgSrc}
+            alt="Photo"
+            src={mediaSrc}
             // The initial auto-scroll only has a short fixed window to correct
             // for layout shifts (see loadMessages). A photo that finishes
             // loading after that window has closed grows the list and
@@ -300,19 +312,63 @@ function MessageRow({
               if (isNearBottom()) scrollToBottom();
             }}
             onError={() => {
-              setImgFailed(true);
+              setMediaFailed(true);
               if (isNearBottom()) scrollToBottom();
             }}
             onClick={() => window.open(blobUrlRef.current ?? mediaUrl ?? undefined, "_blank", "noopener,noreferrer")}
           />
         ) : null}
 
-        {msg.media_path && !isImage ? (
-          // Attachments that aren't images (e.g. from older clients or direct
-          // API inserts) would render as a broken <img> — show a tappable
-          // file chip linking to the stored file instead.
-          <a className="media-file" href={linkHref ?? mediaUrl ?? undefined} target="_blank" rel="noopener noreferrer">
-            {msg._mk ? "🔒 Attachment" : "📎 Attachment"}
+        {msg.media_path && isVideo && !mediaFailed ? (
+          <video
+            className="media"
+            controls
+            preload="metadata"
+            src={mediaSrc}
+            // Same layout-shift correction as the photo's onLoad: video
+            // metadata resolving changes the bubble size after the fact.
+            onLoadedMetadata={() => {
+              if (isNearBottom()) scrollToBottom();
+            }}
+            onError={() => {
+              setMediaFailed(true);
+              if (isNearBottom()) scrollToBottom();
+            }}
+          />
+        ) : null}
+
+        {msg.media_path && isAudio && !mediaFailed ? (
+          <audio
+            className="media-audio"
+            controls
+            preload="metadata"
+            src={mediaSrc}
+            onLoadedMetadata={() => {
+              if (isNearBottom()) scrollToBottom();
+            }}
+            onError={() => {
+              setMediaFailed(true);
+              if (isNearBottom()) scrollToBottom();
+            }}
+          />
+        ) : null}
+
+        {msg.media_path && (!playable || mediaFailed) ? (
+          // Generic file attachments — or media that failed to load/decrypt
+          // (e.g. from older clients or direct API inserts) — render as a
+          // tappable file chip carrying the original filename.
+          <a
+            className="media-file"
+            href={linkHref ?? mediaUrl ?? undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            download={attachmentName || undefined}
+          >
+            <span className="media-file-icon" aria-hidden="true">
+              📎
+            </span>
+            <span className="media-file-name">{attachmentName || "Attachment"}</span>
+            {fileSize != null ? <span className="media-file-size">{formatBytes(fileSize)}</span> : null}
           </a>
         ) : null}
 
