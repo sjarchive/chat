@@ -116,8 +116,15 @@ export default function ChatApp() {
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const chatScreenApiRef = useRef<ChatScreenApi | null>(null);
   const setAppHeight = useViewportHeight(() => {
-    // Keep the composer in view when the keyboard is open
-    if (document.activeElement?.id === "message-input") chatScreenApiRef.current?.scrollToBottom();
+    // Keep the composer anchored after the keyboard resizes the layout — but
+    // only when the input was focused while the list was already near the
+    // bottom. Someone scrolled up to reply to an older message keeps their
+    // reading position while typing; the newest message gets revealed by the
+    // explicit Send scroll (see sendMessage), not by opening the keyboard.
+    const api = chatScreenApiRef.current;
+    if (document.activeElement?.id === "message-input" && api?.inputFocusedNearBottom()) {
+      api.scrollToBottom();
+    }
   });
 
   // ---------- state setters that keep refs in sync ----------
@@ -734,7 +741,14 @@ export default function ChatApp() {
   const startReply = useCallback(
     (msg: MessageView) => {
       setReplying(msg);
-      chatScreenApiRef.current?.focusInput();
+      // Desktop only: pre-focus the composer so typing starts immediately
+      // (focusing there doesn't scroll anything). On touch, focusing would
+      // open the keyboard and yank the list to the newest message before the
+      // user even types — the reply strip must open in place, and the jump
+      // to the (sent) reply belongs to the Send action.
+      if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        chatScreenApiRef.current?.focusInput();
+      }
     },
     [setReplying]
   );

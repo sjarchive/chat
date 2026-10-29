@@ -176,7 +176,10 @@ html.kb-following-scroll .screen {
    shows the dim as a grey rectangle with visible boundaries while it fades.
    The card shrinking slightly reads as the dialog "settling" instead. */
 .settings-overlay.fade-out .settings-card { transform: scale(0.98); }
-.reply-preview.fade-out { transform: translateY(100%); }
+/* The translate-slide previously applied to .reply-preview.fade-out is gone:
+   the strip now fades in place inside .reply-strip-wrap (below), which owns
+   the height so the composer space collapses in stride with the fade — one
+   motion instead of a slide followed by a layout pop. */
 .composer-error.fade-out { transform: translateY(100%); }
 .jump-bottom { transition: opacity 0.18s ease, transform 0.18s ease, filter 0.15s ease, background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
 .jump-bottom.fade-out { transform: translateY(8px); }
@@ -920,13 +923,24 @@ html.kb-following-scroll .screen {
 #jump-bottom-count:empty { display: none; }
 
 /* ---------- Composer ---------- */
-/* Wraps reply-preview + composer-error + composer so the jump-bottom button
-   can anchor to the stack's top edge: when the reply strip opens, the stack
-   grows upward and carries the button with it, keeping the button above the
-   âœ• instead of on top of it. */
+/* Wraps reply-strip-wrap (+ reply-preview) + composer-error + composer so the
+   jump-bottom button can anchor to the stack's top edge: when the reply strip
+   opens, the stack grows upward and carries the button with it, keeping the
+   button above the strip instead of on top of its cancel button. */
 .composer-stack {
   position: relative;
   flex-shrink: 0;
+}
+
+/* Clips + animates the reply strip's height around .reply-preview. Opening
+   eases the wrapper to the strip's measured height; closing eases to 0 while
+   the strip fades out — the strip's space collapses in stride with its fade
+   instead of being dropped all at once when .hidden lands. */
+.reply-strip-wrap {
+  height: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: height 0.18s ease;
 }
 
 .composer-error {

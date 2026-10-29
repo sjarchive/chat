@@ -47,6 +47,12 @@ export interface ChatScreenApi {
   focusInput(): void;
   /** Put text back into the composer (failed send). */
   putText(text: string): void;
+  /** True while the input is the focused field AND it took focus while the
+   * list was near its bottom. The keyboard-opening viewport sync re-anchors
+   * to the newest message only in that case — focusing the composer from
+   * deep in history (to reply to an older message) must not yank the user
+   * to the latest message; only sending does that (see sendMessage). */
+  inputFocusedNearBottom(): boolean;
   /** Used by scrollToMessage(): center a row element in the viewport. */
   scrollRowIntoView(row: HTMLElement, behavior?: ScrollBehavior): void;
 }
@@ -113,6 +119,13 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
   const jumpVisibleRef = useRef(false);
   const [jumpVisible, setJumpVisible] = useState(false);
   const rafBusyRef = useRef(false);
+
+  // Set when the composer input takes focus: whether the list was near its
+  // bottom at that instant. The keyboard-opening viewport sync (see ChatApp)
+  // re-anchors to the newest message only when this is true, so composing a
+  // reply from mid-history keeps the reading position instead of jumping to
+  // the latest message — the jump is reserved for hitting Send.
+  const keyboardAnchorRef = useRef(false);
 
   const isNearBottom = useCallback(() => {
     const el = listRef.current;
@@ -184,6 +197,8 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
       isNearBottom,
       bumpUnseen,
       focusInput: () => inputRef.current?.focus(),
+      /** Captured on the input's focus event (keyboardAnchorRef). */
+      inputFocusedNearBottom: () => keyboardAnchorRef.current,
       putText: (text: string) => setInput(text),
       scrollRowIntoView: (row: HTMLElement, behavior: ScrollBehavior = "smooth") => {
         const el = listRef.current;
@@ -276,6 +291,53 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
   const replyFade = useFade(!!replyingTo);
   const errFade = useFade(composerErrorVisible);
   const typingFade = useFade(!!typingText);
+
+  // ---------- Reply strip height animation ----------
+  // #reply-preview is wrapped in .reply-strip-wrap, whose height eases
+  // between 0 and the strip's measured height. The open/close therefore
+  // happens in ONE motion: opening grows the strip's space while it fades
+  // in; closing collapses the space while it fades out — instead of the
+  // old flow (strip slides down over the composer, its space then drops
+  // all at once when .hidden lands), which read as two separate stages.
+  const replyWrapRef = useRef<HTMLDivElement | null>(null);
+  const replyStripRef = useRef<HTMLDivElement | null>(null);
+  // Tracks the previous hidden state so the effect can tell an open from a
+  // close. true matches useFade's initial state for !!replyingTo === false.
+  const prevReplyHiddenRef = useRef(true);
+  useEffect(() => {
+    const wrap = replyWrapRef.current;
+    const strip = replyStripRef.current;
+    if (!wrap || !strip) return;
+    const target = strip.offsetHeight || 0;
+    const prevHidden = prevReplyHiddenRef.current;
+    prevReplyHiddenRef.current = replyFade.hidden;
+    const current = wrap.getBoundingClientRect().height;
+
+    if (replyFade.hidden) {
+      // Fully closed: snap to 0 with no transition (the fade already ran).
+      if (current !== 0) {
+        wrap.style.transition = "none";
+        wrap.style.height = "0px";
+      }
+      return;
+    }
+    if (prevHidden) {
+      // Opening: start collapsed with no transition, flush, then ease to the
+      // measured height. Reads as the strip sliding up from under the
+      // composer while it fades in.
+      wrap.style.transition = "none";
+      wrap.style.height = "0px";
+      void wrap.offsetHeight;
+      wrap.style.transition = "";
+      wrap.style.height = `${target}px`;
+    } else if (replyFade.fading) {
+      // Closing: tween to 0 while the strip fades out — the wrapper's CSS
+      // height transition does the moving, so nothing pops afterwards.
+      wrap.style.height = "0px";
+    }
+    // Fade settled open (fading:false, not hidden): the height is already
+    // pinned to the measured value; nothing to write.
+  }, [replyFade]);
 
   // ---------- Header: tap must not select, hold must ----------
   // On mobile, a tap on the partner's name whose finger drifts a few pixels
@@ -401,18 +463,20 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
           ↓ <span id="jump-bottom-count">{unseenCount > 0 ? unseenCount : ""}</span>
         </button>
 
-        <div id="reply-preview" className={fadeClass("reply-preview", replyFade)}>
-          <div className="reply-preview-info">
-            <span id="reply-preview-name" className="reply-preview-name">
-              {replyingName}
-            </span>
-            <span id="reply-preview-text" className="reply-preview-text">
-              {replyingTo ? (replyingTo.body ? truncate(replyingTo.body, 80) : replyingTo.media_path ? attachmentPreview(replyingTo.media_type ?? null) : "") : ""}
-            </span>
+        <div className="reply-strip-wrap" ref={replyWrapRef}>
+          <div id="reply-preview" ref={replyStripRef} className={fadeClass("reply-preview", replyFade)}>
+            <div className="reply-preview-info">
+              <span id="reply-preview-name" className="reply-preview-name">
+                {replyingName}
+              </span>
+              <span id="reply-preview-text" className="reply-preview-text">
+                {replyingTo ? (replyingTo.body ? truncate(replyingTo.body, 80) : replyingTo.media_path ? attachmentPreview(replyingTo.media_type ?? null) : "") : ""}
+              </span>
+            </div>
+            <button type="button" id="reply-preview-cancel" className="icon-button" aria-label="Cancel reply" onClick={onReplyCancel}>
+              ✕
+            </button>
           </div>
-          <button type="button" id="reply-preview-cancel" className="icon-button" aria-label="Cancel reply" onClick={onReplyCancel}>
-            ✕
-          </button>
         </div>
 
         <p id="composer-error" className={fadeClass("composer-error", errFade)} role="alert">
@@ -438,6 +502,8 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
             autoComplete="off"
             ref={inputRef}
             value={input}
+            onFocus={() => keyboardAnchorRef.current = isNearBottom()}
+            onBlur={() => keyboardAnchorRef.current = false}
             onChange={(e) => {
               setInput(e.target.value);
               onTyping(e.target.value);
