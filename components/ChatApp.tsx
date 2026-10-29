@@ -507,18 +507,19 @@ export default function ChatApp() {
       const rendered = await renderAllMessages(messagesList, seq);
       if (!rendered) return;
 
-      // Always open the conversation at the newest message. scrollTop is set
-      // directly (no smooth scroll), so the latest message is simply what's
-      // on screen from the first paint. Skipped on the scrollToMessage()
-      // path (includeMessageId set): that call only re-renders to materialize
-      // the target row, and these bottom-anchors would fire mid-flight and
-      // yank the user back down before the scroll to the target finishes.
+      // Anchor the opened conversation at the newest message. The old
+      // synchronous scrollToBottom() call here was removed: renderAllMessages()
+      // only QUEUES the rows via setMessages — React commits them to the DOM
+      // asynchronously — so that call measured a still-empty list and clamped
+      // to scrollTop 0, and the guarded re-asserts below could never recover
+      // (a freshly-tall list at scrollTop 0 is "not near bottom") — the view
+      // stayed parked on the oldest messages. ChatScreen now anchors itself
+      // in a layout effect keyed on convoKey (post-commit, pre-paint), which
+      // puts the latest message on screen from the first frame. These
+      // re-asserts then just hold the bottom against late height changes
+      // (images/content-visibility resolving), guarded so a user who scrolled
+      // up immediately is never dragged back down.
       if (!includeMessageId) {
-        chatScreenApiRef.current?.scrollToBottom();
-        // Images and content-visibility placeholders resolving a few frames
-        // later can change the scroll height and nudge the viewport off the
-        // bottom; re-assert it briefly. isNearBottom() guards this so a user
-        // who scrolled up immediately is never dragged back down.
         requestAnimationFrame(() => {
           if (chatScreenApiRef.current?.isNearBottom()) chatScreenApiRef.current?.scrollToBottom();
         });
@@ -1775,6 +1776,10 @@ export default function ChatApp() {
 
         <ChatScreen
           ref={chatScreenApiRef}
+          // Identifies which conversation is open ("" when none). ChatScreen
+          // keys its bottom-anchor layout effect off this so re-opening any
+          // chat — even the same one — lands on the newest message.
+          convoKey={currentPartner ?? ""}
           fade={chatFade}
           canSend={!!currentPartner && !!currentUser}
           partnerName={partnerName}

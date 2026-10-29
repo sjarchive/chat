@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -51,6 +52,9 @@ export interface ChatScreenApi {
 }
 
 interface ChatScreenProps {
+  /** Partner id of the open conversation, "" when none. Conversation-change
+   * key for the bottom-anchor effect (see pendingAnchor below). */
+  convoKey: string;
   fade: { hidden: boolean; fading: boolean };
   canSend: boolean;
   partnerName: string;
@@ -75,6 +79,7 @@ interface ChatScreenProps {
 
 const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScreen(
   {
+    convoKey,
     fade,
     canSend,
     partnerName,
@@ -147,6 +152,30 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
     setUnseenCount(unseenRef.current);
     updateJumpBottom();
   }, [updateJumpBottom]);
+
+  // Re-anchor the list to the newest message whenever a conversation opens.
+  // The imperative scrollToBottom() from ChatApp's loadMessages() fires right
+  // after renderAllMessages() queues the rows — but React commits them to the
+  // DOM asynchronously, so that call measured a still-empty list (no-op), and
+  // the guarded re-asserts can never recover because at scrollTop 0 the
+  // freshly-tall list reports "not near bottom". This layout effect runs
+  // AFTER the commit but BEFORE the paint, so the first frame of an opened
+  // chat already shows the latest message, with no top-of-history flash.
+  // Rows empty = history still loading: keep waiting for the render that
+  // actually mounts this conversation's rows (the open path clears the list
+  // first). Jump-to-bottom and the unseen counter stay in sync with what
+  // scrollToBottom() would have done.
+  const anchoredForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (convoKey === anchoredForRef.current) return;
+    if (rows.length === 0) return;
+    anchoredForRef.current = convoKey;
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    unseenRef.current = 0;
+    setUnseenCount(0);
+    updateJumpBottom();
+  }, [convoKey, rows, updateJumpBottom]);
 
   useImperativeHandle(
     ref,
