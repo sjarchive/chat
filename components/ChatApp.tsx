@@ -68,7 +68,6 @@ export default function ChatApp() {
   const usernameCacheRef = useRef<Record<string, string>>({});
   const messageCacheRef = useRef<Record<string, MessageView>>({});
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const activeBlobUrlsRef = useRef<Set<string>>(new Set());
 
   // ---------- data ----------
   const [chatSummaries, setChatSummaries] = useState<Record<string, ChatSummary>>({});
@@ -266,12 +265,7 @@ export default function ChatApp() {
     [hideComposerError]
   );
 
-  // ---------- blob url tracking / row registration ----------
-  const trackBlobUrl = useCallback((url: string): string => {
-    if (url && url.startsWith("blob:")) activeBlobUrlsRef.current.add(url);
-    return url;
-  }, []);
-
+  // ---------- row registration ----------
   const registerRow = useCallback((id: string, el: HTMLDivElement | null) => {
     if (el) rowRefs.current.set(id, el);
     else rowRefs.current.delete(id);
@@ -405,10 +399,34 @@ export default function ChatApp() {
 
   // ---------- message list ----------
   const resetMessages = useCallback(() => {
-    for (const url of activeBlobUrlsRef.current) URL.revokeObjectURL(url);
-    activeBlobUrlsRef.current = new Set();
+    // Blob URLs are owned by the decrypted-media cache in lib/crypto.ts now,
+    // which revokes them at LRU eviction and on sign-out — so switching
+    // conversations no longer drops them (and no longer forces every photo /
+    // video to re-download and re-decrypt on the next visit).
     pendingOutgoingRef.current = [];
     setMessages([]);
+  }, []);
+
+  // Paints the newly opened conversation immediately from the decrypted
+  // in-memory cache instead of showing a blank transcript until the history
+  // fetch lands. Same data the fetch will replace with a fresh slice a moment
+  // later; rendering it first hides most of that round trip behind real
+  // content (WhatsApp-style). With nothing cached (first open / fresh page
+  // load) it behaves exactly like the old reset: an empty list, no stale rows
+  // from the previously open conversation.
+  const repaintCachedMessages = useCallback((user: string, partner: string) => {
+    pendingOutgoingRef.current = [];
+    const cached = Object.values(messageCacheRef.current)
+      .filter(
+        (m) =>
+          !m._pending &&
+          ((m.sender_id === user && m.recipient_id === partner) || (m.sender_id === partner && m.recipient_id === user))
+      )
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    // Same reasoning as renderAllMessages: no per-row entry animation on a
+    // non-animated batch.
+    setMessages(cached.map((v) => ({ ...v, _animate: false })));
+    return cached.length > 0;
   }, []);
 
   // Batch render of existing history: no per-row entry animation (see the
@@ -588,6 +606,11 @@ export default function ChatApp() {
   // Removes an optimistic bubble that never made it to the server (send
   // failed).
   const removePendingMessage = useCallback((tempId: string) => {
+    const failed = messageCacheRef.current[tempId];
+    // The optimistic bubble is dropped everywhere below, so its local
+    // preview URL has no viewer left — free it (rare path, but a failed
+    // send shouldn't leak a multi-megabyte blob).
+    if (failed?._localBlobUrl) URL.revokeObjectURL(failed._localBlobUrl);
     pendingOutgoingRef.current = pendingOutgoingRef.current.filter((m) => m.id !== tempId);
     setMessages((prev) => (prev.some((m) => m.id === tempId) ? prev.filter((m) => m.id !== tempId) : prev));
     delete messageCacheRef.current[tempId];
@@ -614,6 +637,13 @@ export default function ChatApp() {
     Object.assign(optimisticMsg, realMsg, { _pending: false, _animate: false });
     messageCacheRef.current[optimisticMsg.id] = optimisticMsg;
     setMessages((prev) => prev.map((m) => (m.id === tempId ? optimisticMsg : m)));
+    // The row's local preview blob holds exactly the bytes that were
+    // uploaded — hand it to the decrypted-media cache under the newly
+    // confirmed storage path, so the row (and any later re-render) reuses
+    // that URL instead of re-downloading the just-sent file.
+    if (realMsg.media_path && optimisticMsg._localBlobUrl) {
+      CircleCrypto.cacheMediaUrl(realMsg.media_path, optimisticMsg._localBlobUrl, optimisticMsg._fileSize ?? 0);
+    }
   }, []);
 
   // ---------- Typing indicator (Realtime broadcast, no DB writes) ----------
@@ -889,7 +919,7 @@ export default function ChatApp() {
           : file.type.startsWith("audio/")
             ? "🎵 Audio"
             : `📎 ${truncate(upload.name, 40)}`;
-      const localPreviewUrl = trackBlobUrl(URL.createObjectURL(upload));
+      const localPreviewUrl = URL.createObjectURL(upload);
       const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const optimisticMsg: MessageView = {
         id: tempId,
@@ -969,7 +999,7 @@ export default function ChatApp() {
         if (currentPartnerRef.current === targetPartner) cancelReply();
       }
     },
-    [cancelReply, hideComposerError, removePendingMessage, resolvePendingMessage, showComposerError, trackBlobUrl, updateChatSummaryFor]
+    [cancelReply, hideComposerError, removePendingMessage, resolvePendingMessage, showComposerError, updateChatSummaryFor]
   );
 
   // ---------- Search ----------
@@ -1180,11 +1210,14 @@ export default function ChatApp() {
       if (!profileCacheRef.current[partnerId]) {
         void ensureProfileCached(partnerId);
       }
-      // Clear out the previous conversation's messages immediately, rather
-      // than leaving them on screen until loadMessages()'s fetch resolves —
-      // otherwise there's a visible flash of stale content right after the
-      // screen switches.
-      resetMessages();
+      // Swap the previous conversation's rows for whatever we already hold
+      // decrypted for THIS conversation (usually most of the same window the
+      // fetch below will confirm). Without a cache hit this is the old clear:
+      // the screen switches with an empty transcript instead of flashing
+      // stale content between conversations.
+      const userAtOpen = currentUserRef.current?.id;
+      if (userAtOpen) repaintCachedMessages(userAtOpen, partnerId);
+      else resetMessages();
       cancelReply();
       hideComposerError();
       setSearchTerm("");
@@ -1206,6 +1239,7 @@ export default function ChatApp() {
       hideSearchResults,
       loadMessages,
       markConversationSeen,
+      repaintCachedMessages,
       resetMessages,
       setAppHeight,
       setPartner,
@@ -1280,6 +1314,9 @@ export default function ChatApp() {
     CircleCrypto.clearSession();
     closeConversation();
     resetMessages();
+    // Decrypted content from the previous account must not outlive the
+    // session (media blobs are already revoked inside clearSession).
+    messageCacheRef.current = {};
     applySummaries({});
     // Leaving also stops broadcasting presence: removing the channel sends
     // the leave, so other users' dots go gray immediately rather than
@@ -1836,7 +1873,6 @@ export default function ChatApp() {
           onBack={onBack}
           onOpenReply={startReply}
           onQuoteClick={(id) => void scrollToMessage(id)}
-          onMediaDecrypted={trackBlobUrl}
           registerRow={registerRow}
         />
 

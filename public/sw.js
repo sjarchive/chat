@@ -1,12 +1,5 @@
-// Minimal service worker — install-to-home-screen + push notifications.
-
-self.addEventListener("install", () => {
-  self.skipWaiting();
-});
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
-});
+// Minimal service worker — install-to-home-screen + push notifications plus
+// shell/asset caching (see the fetch handler at the bottom).
 
 // ---------- IndexedDB ----------
 // localStorage isn't available in service workers, so the page stashes the
@@ -154,4 +147,94 @@ self.addEventListener("notificationclick", (event) => {
       if (self.clients.openWindow) return self.clients.openWindow("/");
     })
   );
+});
+
+// ---------- shell + asset caching ----------
+// Without this, every load refetched index.html + the JS bundle over the
+// network, which is the "slight delay" on each (re)load/CPU wake. Strategy:
+//   - Navigations: network-first (always fresh HTML after a deploy) with the
+//     last good copy as instant/offline fallback.
+//   - Same-origin static assets: stale-while-revalidate — instant cache
+//     answer, network refresh underneath. Anything under /assets/ is content-
+//     hashed, so a stale hit can never reference a dead file from an old
+//     deploy (the fresh HTML names the new hashes).
+// Everything else (cross-origin Supabase calls, /api/*) is untouched.
+const SHELL_CACHE = "circle-shell-v1";
+const ASSET_EXTENSIONS = /\.(?:js|css|svg|png|ico|json|woff2?|webmanifest)$/;
+
+self.addEventListener("install", (event) => {
+  // Warm the cache in the background where possible; never block activation
+  // on a first-install fetch failure (e.g. offline install).
+  event.waitUntil(
+    (async () => {
+      try {
+        const cache = await caches.open(SHELL_CACHE);
+        const res = await fetch("/");
+        if (res.ok) await cache.put("/", res.clone());
+      } catch (e) {}
+    })()
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      // Drop caches left by earlier versions.
+      const names = await caches.keys();
+      await Promise.all(names.filter((n) => n.startsWith("circle-shell-") && n !== SHELL_CACHE).map((n) => caches.delete(n)));
+      await self.clients.claim();
+    })()
+  );
+});
+
+async function navigationResponse(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const res = await fetch(request);
+    if (res.ok) {
+      // The worker serves the same shell for every path; store all
+      // navigations under one canonical key and serve from it.
+      await cache.put("/", res.clone());
+    }
+    return res;
+  } catch (err) {
+    const cached = await cache.match("/");
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+// Cache-first + background refresh: the response the user gets is the stored
+// copy (no network wait), then the network is re-checked so the next load is
+// current even after a deploy.
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(request);
+  const refresh = fetch(request)
+    .then((res) => {
+      if (res.ok) return cache.put(request, res.clone()).then(() => res);
+      return res;
+    })
+    .catch(() => null);
+  if (cached) {
+    refresh.catch(() => {});
+    return cached;
+  }
+  const fresh = await refresh;
+  return fresh || Response.error();
+}
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET" || !req.url.startsWith(self.location.origin + "/")) return;
+
+  if (req.mode === "navigate") {
+    event.respondWith(navigationResponse(req));
+    return;
+  }
+  const path = new URL(req.url).pathname;
+  if (path.startsWith("/assets/") || ASSET_EXTENSIONS.test(path)) {
+    event.respondWith(staleWhileRevalidate(req));
+  }
 });

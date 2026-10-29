@@ -41,7 +41,33 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === "/api/notify") return handleNotify(request, env, ctx);
     // Any other path serves the single-page app shell.
-    return env.ASSETS.fetch(new Request(new URL("/", request.url)));
+    const res = await env.ASSETS.fetch(new Request(new URL("/", request.url)));
+
+    // Inject a preconnect hint into the shell: the browser can then overlap
+    // the Supabase origin's DNS+TCP+TLS handshake with the JS bundle
+    // download/parse, trimming ~100-300ms off the first REST call and the
+    // realtime websocket join that follow. crossOrigin matters — REST/auth
+    // calls are CORS requests, and only a CORS-mode preconnect's connection
+    // can be reused for them.
+    if (env.SUPABASE_URL && res.headers.get("content-type")?.includes("text/html")) {
+      try {
+        const apiOrigin = new URL(env.SUPABASE_URL).origin;
+        const html = await res.text();
+        const hint = `<link rel="preconnect" href="${apiOrigin}" crossorigin />\n    `;
+        const injected = html.replace("</head>", `${hint}</head>`);
+        if (injected !== html) {
+          const headers = new Headers(res.headers);
+          // The body is now our own re-serialized string; stale storage
+          // metadata would truncate it.
+          headers.delete("content-length");
+          headers.delete("content-encoding");
+          return new Response(injected, { status: res.status, headers });
+        }
+      } catch {
+        // Fall through — serving the shell unchanged beats failing on it.
+      }
+    }
+    return res;
   },
 
   // Cron trigger (see wrangler.jsonc `triggers.crons`).

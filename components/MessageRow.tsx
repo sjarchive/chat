@@ -25,7 +25,6 @@ export interface MessageRowProps {
   quotedName: string;
   onOpenReply: (msg: MessageView) => void;
   onQuoteClick: (replyToId: string) => void;
-  onMediaDecrypted: (url: string) => void;
   isNearBottom: () => boolean;
   scrollToBottom: () => void;
   registerRow: (id: string, el: HTMLDivElement | null) => void;
@@ -43,7 +42,6 @@ function MessageRow({
   quotedName,
   onOpenReply,
   onQuoteClick,
-  onMediaDecrypted,
   isNearBottom,
   scrollToBottom,
   registerRow,
@@ -95,7 +93,6 @@ function MessageRow({
     let cancelled = false;
     CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi ?? "", msg.media_type).then((dec) => {
       if (cancelled || !dec) return;
-      onMediaDecrypted(dec.url);
       blobUrlRef.current = dec.url;
       if (playable) setMediaSrc(dec.url);
       else {

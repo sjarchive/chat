@@ -79,7 +79,6 @@ interface ChatScreenProps {
   onBack: () => void;
   onOpenReply: (msg: MessageView) => void;
   onQuoteClick: (replyToId: string) => void;
-  onMediaDecrypted: (url: string) => void;
   registerRow: (id: string, el: HTMLDivElement | null) => void;
 }
 
@@ -104,7 +103,6 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
     onBack,
     onOpenReply,
     onQuoteClick,
-    onMediaDecrypted,
     registerRow,
   },
   ref
@@ -383,7 +381,6 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
         quotedName={r.quotedName}
         onOpenReply={onOpenReply}
         onQuoteClick={onQuoteClick}
-        onMediaDecrypted={onMediaDecrypted}
         isNearBottom={isNearBottom}
         scrollToBottom={scrollToBottom}
         registerRow={registerRow}

@@ -132,6 +132,7 @@ function clearSession(): void {
   myPubRaw = null;
   myPubB64 = null;
   for (const k of Object.keys(aesKeyCache)) delete aesKeyCache[k];
+  clearMediaUrls();
   idbDelete("private-key").catch(() => {});
 }
 
@@ -361,14 +362,57 @@ async function encryptFileForSend(file: File): Promise<{ data: Blob; mk: string;
   };
 }
 
+// Decrypted-media blob URLs, per storage path, replacing per-switch
+// revocation: opening a conversation used to wipe every blob URL, so the next
+// visit re-downloaded AND re-decrypting each photo/video from Storage. Ordered
+// Map = LRU (a hit re-inserts the entry to keep it "most recent").
+const MEDIA_URL_CACHE_MAX = 64;
+const MEDIA_URL_REVOKE_DELAY_MS = 120000;
+const mediaUrlCache = new Map<string, { url: string; size: number }>();
+
+function cacheMediaUrl(path: string, url: string, size: number): void {
+  mediaUrlCache.delete(path);
+  mediaUrlCache.set(path, { url, size });
+  trimMediaCache();
+}
+
+// Over capacity: drop the oldest entries and schedule their revocation.
+// Lazy revoke — an evicted URL can still be mounted in the open chat (a row
+// only re-resolves its media on remount), so it must keep working for a short
+// grace period before the memory is actually freed.
+function trimMediaCache(): void {
+  while (mediaUrlCache.size > MEDIA_URL_CACHE_MAX) {
+    const oldest = mediaUrlCache.keys().next().value;
+    if (!oldest) break;
+    const entry = mediaUrlCache.get(oldest)!;
+    mediaUrlCache.delete(oldest);
+    const url = entry.url;
+    setTimeout(() => URL.revokeObjectURL(url), MEDIA_URL_REVOKE_DELAY_MS);
+  }
+}
+
+// Sign-out: blob URLs belong to one account's content — free them all now.
+function clearMediaUrls(): void {
+  for (const entry of mediaUrlCache.values()) URL.revokeObjectURL(entry.url);
+  mediaUrlCache.clear();
+}
+
 // Fetches ciphertext from Storage and decrypts to an object URL, plus the
 // plaintext size (only the blob knows it — the wire just carries ciphertext).
+// A path already in the cache is returned instantly: no download, no AES
+// round, no new object URL.
 async function decryptMedia(
   mediaPath: string,
   mkB64: string,
   miB64: string,
   mime: string | null
 ): Promise<{ url: string; size: number } | null> {
+  const cached = mediaUrlCache.get(mediaPath);
+  if (cached) {
+    mediaUrlCache.delete(mediaPath);
+    mediaUrlCache.set(mediaPath, cached); // bump recency
+    return cached;
+  }
   try {
     const publicUrl = supabaseClient.storage.from("chat-media").getPublicUrl(mediaPath).data.publicUrl;
     const res = await fetch(publicUrl);
@@ -376,7 +420,9 @@ async function decryptMedia(
     const key = await crypto.subtle.importKey("raw", unb64(mkB64), { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(miB64) }, key, await res.arrayBuffer());
     const blob = new Blob([plain], { type: mime || "application/octet-stream" });
-    return { url: URL.createObjectURL(blob), size: blob.size };
+    const url = URL.createObjectURL(blob);
+    cacheMediaUrl(mediaPath, url, blob.size);
+    return { url, size: blob.size };
   } catch (err) {
     console.error(err);
     return null;
@@ -392,4 +438,5 @@ export const CircleCrypto = {
   decryptRow,
   encryptFileForSend,
   decryptMedia,
+  cacheMediaUrl,
 };
