@@ -213,6 +213,12 @@ function MessageRow({
         replyBtn.style.transform = "translateX(0)";
       }
       if (swiping && dragDistance >= THRESHOLD) {
+        // Bubble feedback: give it the same slight left "jump" the desktop
+        // click uses (remove class, force reflow, re-add so rapid repeat
+        // swipes replay the animation instead of no-oping).
+        row.classList.remove("reply-bounce");
+        void row.offsetWidth;
+        row.classList.add("reply-bounce");
         openReplyRef.current(msg);
       }
       swiping = false;
@@ -235,7 +241,9 @@ function MessageRow({
     e.preventDefault();
     // Restart the animation even on rapid re-clicks: removing the class,
     // forcing reflow, then re-adding it makes the browser treat it as a
-    // fresh animation instead of a no-op (class already present).
+    // fresh animation instead of a no-op (class already present). The row
+    // ref is filled by the outer div's ref callback; without that assignment
+    // this whole bounce (and the touch swipe) silently no-ops.
     const row = rowRef.current;
     if (row) {
       row.classList.remove("reply-bounce");
@@ -262,8 +270,15 @@ function MessageRow({
   return (
     <div
       ref={(el) => {
+        // This is a callback ref, so React never fills rowRef.current itself
+        // (unlike the object refs on bubble/reply-trigger below) — keep it in
+        // sync manually: the swipe gesture and the click bounce both read it.
+        rowRef.current = el;
         registerRow(msg.id, el);
-        return () => registerRow(msg.id, null);
+        return () => {
+          rowRef.current = null;
+          registerRow(msg.id, null);
+        };
       }}
       className={`msg-row ${mine ? "mine" : "theirs"}${groupLast ? " group-last" : ""} ${grouped ? "grouped" : "group-start"}${animateIn ? " animate-in" : ""}`}
       data-msg-id={msg.id}
