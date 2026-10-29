@@ -27,7 +27,7 @@ worker/
                        # + scheduled: Supabase keep-alive cron
 vite.config.ts         # react plugin + NEXT_PUBLIC_ envPrefix
 wrangler.jsonc         # worker "chat" (replaces the previous one on deploy)
-public/                # sw.js, manifest.json, icons — copied verbatim
+public/                # sw.js, manifest.json, favicon.svg + PWA icons — copied verbatim
 ```
 
 Asset routing is assets-first: requests matching a file in `dist/` are served directly by Workers static assets; everything else (any path, since the app is a single page) falls through to the worker and gets the app shell.
