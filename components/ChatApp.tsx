@@ -3,7 +3,7 @@
 // screens; Supabase calls, realtime channel lifecycle, optimistic sends,
 // E2EE wiring and history handling are direct ports of the original logic.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabaseClient } from "@/lib/supabase";
 import { CircleCrypto } from "@/lib/crypto";
@@ -52,6 +52,10 @@ export default function ChatApp() {
   const [authShown, setAuthShown] = useState(true);
   const [chatsShown, setChatsShown] = useState(false);
   const [chatShown, setChatShown] = useState(false);
+  // While true, the <head> script's has-session/has-open-chat CSS overrides
+  // stay in force and cover every paint until React's own screen state is
+  // authoritative — see the layout effect that consumes this in enterApp.
+  const [headOverrides, setHeadOverrides] = useState(true);
   const [placeholderShown, setPlaceholderShown] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpenRef = useRef(false);
@@ -1500,13 +1504,15 @@ export default function ChatApp() {
     if (!user) return;
     // The flash-prevention "has-session"/"has-open-chat" classes (set in
     // <head>, before this real auth check ran) have CSS overrides that
-    // force-show #chats-screen or #chat-screen even while they carry the
-    // "hidden" class, specifically so the right screen is visible during
-    // that brief pre-JS window on a refresh. Once we're here, real class
-    // toggling takes over for the rest of the session — so drop them,
-    // otherwise those overrides keep outranking every future .hidden toggle.
-    document.documentElement.classList.remove("has-session");
-    document.documentElement.classList.remove("has-open-chat");
+    // force-show #chats-screen/#chat-screen and hide #auth-screen while the
+    // React render state below is still stale. Removing them directly here
+    // used to race the React commits: a paint could land after the class
+    // removal but before setAuthShown(false)/setChatsShown(true) committed —
+    // painting the auth screen full-bleed for a frame (the "login flash" on
+    // refresh). They're removed by the layout effect keyed on headOverrides
+    // below, in the same commit as the real screen state, pre-paint — no
+    // frame exists between "overrides on, stale state" and "overrides off,
+    // real state".
     // Desktop two-pane: marks the signed-in shell so the desktop layout CSS
     // (chats list pane + conversation pane) applies — removed again on
     // sign-out so the overrides can't leak onto the auth screen.
@@ -1563,6 +1569,10 @@ export default function ChatApp() {
       void loadChatSummaries();
     }
     void profilesPromise;
+    // Real screen state has just committed its setter calls: flipping
+    // headOverrides in the SAME batch lets the layout effect below drop the
+    // has-session/has-open-chat overrides in this commit, pre-paint.
+    setHeadOverrides(false);
   }, [
     ensureRealtime,
     loadChatSummaries,
@@ -1571,6 +1581,20 @@ export default function ChatApp() {
     setAppHeight,
     setPartner,
   ]);
+
+  // Pre-paint handover of the <head> script's flash-prevention overrides.
+  // Runs synchronously after the commit in which headOverrides flipped false
+  // — the same commit that made authShown false and set the real screen
+  // flags — so the browser never paints a frame where no override covers the
+  // stale screens. Afterwards React's own .hidden/.fade-out toggling is
+  // authoritative for the rest of the session, exactly as the overrides used
+  // to predict ("once we're here, drop them or they outrank future toggles").
+  useLayoutEffect(() => {
+    if (headOverrides) return;
+    const html = document.documentElement;
+    html.classList.remove("has-session");
+    html.classList.remove("has-open-chat");
+  }, [headOverrides]);
 
   // ---------- Effects ----------
 
