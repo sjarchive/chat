@@ -44,10 +44,16 @@ export default {
     // falling through to index.html with 200 OK (which poisons SW asset caches
     // and breaks dynamic imports with a MIME error).
     if (pathname.startsWith("/assets/") || pathname.startsWith("/api/")) {
-      return new Response("Not Found", { status: 404 });
+      return new Response("Not Found", {
+        status: 404,
+        headers: { "X-Content-Type-Options": "nosniff" },
+      });
     }
     // Any other path serves the single-page app shell.
-    const res = await env.ASSETS.fetch(new Request(new URL("/", request.url)));
+    const isHead = request.method === "HEAD";
+    const res = await env.ASSETS.fetch(
+      new Request(new URL("/", request.url), { method: isHead ? "HEAD" : "GET" })
+    );
 
     // Inject a preconnect hint into the shell: the browser can then overlap
     // the Supabase origin's DNS+TCP+TLS handshake with the JS bundle
@@ -55,7 +61,7 @@ export default {
     // realtime websocket join that follow. crossOrigin matters — REST/auth
     // calls are CORS requests, and only a CORS-mode preconnect's connection
     // can be reused for them.
-    if (env.SUPABASE_URL && res.headers.get("content-type")?.includes("text/html")) {
+    if (!isHead && env.SUPABASE_URL && res.headers.get("content-type")?.includes("text/html")) {
       try {
         const parsed = new URL(env.SUPABASE_URL);
         if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
@@ -71,6 +77,7 @@ export default {
           // metadata would truncate it.
           headers.delete("content-length");
           headers.delete("content-encoding");
+          headers.delete("etag");
           return new Response(injected, { status: res.status, headers });
         }
       } catch {
