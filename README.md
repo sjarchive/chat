@@ -21,16 +21,16 @@ lib/
   crypto.ts            # CircleCrypto — E2EE port
   push.ts              # SW registration + push subscribe/unsubscribe
   media.ts             # attachment compression/size caps before upload
-  theme.tsx, fade.ts, viewport.ts, utils.ts, types.ts
+  messageState.ts, theme.tsx, fade.ts, viewport.ts, utils.ts, types.ts
 worker/
   index.ts             # POST /api/notify — push relay (old worker.js port)
                        # + scheduled: Supabase keep-alive cron
 vite.config.ts         # react plugin + NEXT_PUBLIC_ envPrefix
 wrangler.jsonc         # worker "chat" (replaces the previous one on deploy)
-public/                # sw.js, manifest.json, favicon.svg + PWA icons — copied verbatim
+public/                # sw.js, manifest.json, _headers, favicon.svg + PWA icons
 ```
 
-Asset routing is assets-first: requests matching a file in `dist/` are served directly by Workers static assets; everything else (any path, since the app is a single page) falls through to the worker and gets the app shell.
+Asset routing uses `run_worker_first` for `/`, `/index.html`, and `/api/*` (so the Worker injects the Supabase preconnect hint on the root shell and handles API routes), while static files in `dist/` (such as hashed `/assets/*`, `/sw.js`, and icons) are served directly by Workers static assets with cache and security headers from `public/_headers`.
 
 ## Development
 
