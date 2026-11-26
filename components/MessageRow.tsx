@@ -24,7 +24,7 @@ export interface MessageRowProps {
   quotedMsg: MessageView | null;
   quotedName: string;
   onOpenReply: (msg: MessageView) => void;
-  onQuoteClick: (replyToId: string) => void;
+  onQuoteClick: (replyToId: string) => Promise<unknown> | void;
   isNearBottom: () => boolean;
   scrollToBottom: () => void;
   registerRow: (id: string, el: HTMLDivElement | null) => void;
@@ -51,8 +51,10 @@ function MessageRow({
   const replyBtnRef = useRef<HTMLButtonElement | null>(null);
   const blobUrlRef = useRef<string | null>(msg._localBlobUrl ?? null);
   const openReplyRef = useRef(onOpenReply);
+  const msgRef = useRef(msg);
   useEffect(() => {
     openReplyRef.current = onOpenReply;
+    msgRef.current = msg;
   });
 
   const [mediaSrc, setMediaSrc] = useState<string | undefined>(undefined);
@@ -84,6 +86,11 @@ function MessageRow({
       else setLinkHref(msg._localBlobUrl);
       return;
     }
+    if (msg._encrypted && !msg._mk) {
+      // Encrypted row failed to decrypt — never fall back to the raw ciphertext URL.
+      setMediaFailed(true);
+      return;
+    }
     if (!msg._mk) {
       // Legacy unencrypted attachment
       if (playable) setMediaSrc(mediaUrl ?? undefined);
@@ -92,7 +99,11 @@ function MessageRow({
     }
     let cancelled = false;
     CircleCrypto.decryptMedia(msg.media_path, msg._mk, msg._mi ?? "", msg.media_type).then((dec) => {
-      if (cancelled || !dec) return;
+      if (cancelled) return;
+      if (!dec) {
+        setMediaFailed(true);
+        return;
+      }
       blobUrlRef.current = dec.url;
       if (playable) setMediaSrc(dec.url);
       else {
@@ -135,14 +146,12 @@ function MessageRow({
     // responsiveness. Shared by endSwipe() and the vertical-scroll-cancel path
     // below, since both leave the row in a state that needs the same restore.
     const restoreTransitions = () => {
-      replyBtn.style.transition =
-        "width 0.18s ease, padding 0.18s ease, opacity 0.15s ease, background-color 0.3s ease, color 0.3s ease";
+      replyBtn.style.transition = mine
+        ? ""
+        : "width 0.18s ease, padding 0.18s ease, opacity 0.15s ease, background-color 0.3s ease, color 0.3s ease, transform 0.18s ease";
       bubble.style.transition = mine
-        ? "background-color 0.3s ease, color 0.3s ease"
+        ? ""
         : "transform 0.18s ease, background-color 0.3s ease, color 0.3s ease";
-      if (!mine) {
-        replyBtn.style.transition += ", transform 0.18s ease";
-      }
     }
 
     const onTouchStart = (e: TouchEvent) => {
@@ -202,12 +211,17 @@ function MessageRow({
       if (!dragging) return;
       dragging = false;
       restoreTransitions();
-      replyBtn.style.width = "0px";
-      replyBtn.style.padding = "0px";
-      replyBtn.style.opacity = "0";
-      if (!mine) {
-        bubble.style.transform = "translateX(0)";
-        replyBtn.style.transform = "translateX(0)";
+      if (swiping) {
+        // Clear inline drag styles back to CSS defaults rather than writing
+        // "0px"/"0", which would override desktop :hover rules on touchscreen
+        // laptops permanently after a single touch.
+        replyBtn.style.width = "";
+        replyBtn.style.padding = "";
+        replyBtn.style.opacity = "";
+        if (!mine) {
+          bubble.style.transform = "";
+          replyBtn.style.transform = "";
+        }
       }
       if (swiping && dragDistance >= THRESHOLD) {
         // Bubble feedback: give it the same slight left "jump" the desktop
@@ -216,7 +230,7 @@ function MessageRow({
         row.classList.remove("reply-bounce");
         void row.offsetWidth;
         row.classList.add("reply-bounce");
-        openReplyRef.current(msg);
+        openReplyRef.current(msgRef.current);
       }
       swiping = false;
     }
@@ -258,7 +272,7 @@ function MessageRow({
     if (!msg.reply_to) return;
     setQuotedBusy(true);
     try {
-      onQuoteClick(msg.reply_to);
+      await onQuoteClick(msg.reply_to);
     } finally {
       setQuotedBusy(false);
     }
@@ -325,7 +339,10 @@ function MessageRow({
               setMediaFailed(true);
               if (isNearBottom()) scrollToBottom();
             }}
-            onClick={() => window.open(blobUrlRef.current ?? mediaUrl ?? undefined, "_blank", "noopener,noreferrer")}
+            onClick={() => {
+              const targetUrl = blobUrlRef.current ?? (msg._encrypted ? null : mediaUrl);
+              if (targetUrl) window.open(targetUrl, "_blank", "noopener,noreferrer");
+            }}
           />
         ) : null}
 
@@ -369,7 +386,7 @@ function MessageRow({
           // tappable file chip carrying the original filename.
           <a
             className="media-file"
-            href={linkHref ?? mediaUrl ?? undefined}
+            href={linkHref ?? (msg._encrypted ? undefined : mediaUrl ?? undefined)}
             target="_blank"
             rel="noopener noreferrer"
             download={attachmentName || undefined}

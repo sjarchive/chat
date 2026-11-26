@@ -44,14 +44,24 @@ export function useFade(shown: boolean): FadeState {
     }
 
     if (!hiddenRef.current) {
-      setState((s) => ({ hidden: false, fading: true }));
+      setState({ hidden: false, fading: true });
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
+        timerRef.current = null;
         hiddenRef.current = true;
         setState({ hidden: true, fading: false });
       }, FADE_MS);
     }
   }, [shown]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
 
   return state;
 }

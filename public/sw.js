@@ -159,7 +159,7 @@ self.addEventListener("notificationclick", (event) => {
 //     hashed, so a stale hit can never reference a dead file from an old
 //     deploy (the fresh HTML names the new hashes).
 // Everything else (cross-origin Supabase calls, /api/*) is untouched.
-const SHELL_CACHE = "circle-shell-v1";
+const SHELL_CACHE = "circle-shell-v2";
 const ASSET_EXTENSIONS = /\.(?:js|css|svg|png|ico|json|woff2?|webmanifest)$/;
 
 self.addEventListener("install", (event) => {
@@ -208,17 +208,22 @@ async function navigationResponse(request) {
 // Cache-first + background refresh: the response the user gets is the stored
 // copy (no network wait), then the network is re-checked so the next load is
 // current even after a deploy.
-async function staleWhileRevalidate(request) {
+async function staleWhileRevalidate(request, event) {
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(request);
   const refresh = fetch(request)
     .then((res) => {
-      if (res.ok) return cache.put(request, res.clone()).then(() => res);
+      // Never cache an HTML fallback response under a static asset URL.
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && !ct.includes("text/html")) {
+        return cache.put(request, res.clone()).then(() => res);
+      }
       return res;
     })
     .catch(() => null);
   if (cached) {
-    refresh.catch(() => {});
+    // Keep the service worker alive until the background revalidation settles.
+    event.waitUntil(refresh.then(() => undefined, () => undefined));
     return cached;
   }
   const fresh = await refresh;
@@ -234,7 +239,8 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   const path = new URL(req.url).pathname;
+  if (path.startsWith("/api/")) return;
   if (path.startsWith("/assets/") || ASSET_EXTENSIONS.test(path)) {
-    event.respondWith(staleWhileRevalidate(req));
+    event.respondWith(staleWhileRevalidate(req, event));
   }
 });

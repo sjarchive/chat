@@ -29,6 +29,7 @@ export async function subscribeToPush(
   userId: string
 ): Promise<void> {
   if (typeof Notification === "undefined") return;
+  if (!VAPID_PUBLIC_KEY || !registration.pushManager) return;
   if (Notification.permission === "denied") return;
   // Re-auth/token-refresh events fire this repeatedly for the same user;
   // permission was already asked (or the subscription already recorded) on
@@ -87,7 +88,7 @@ export async function unsubscribeFromPush(userId: string | null | undefined): Pr
     // any endpoint it misses would keep receiving pushes.
     if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
       const registration = await navigator.serviceWorker.getRegistration();
-      const subscription = registration ? await registration.pushManager.getSubscription() : null;
+      const subscription = registration?.pushManager ? await registration.pushManager.getSubscription() : null;
       if (subscription) await subscription.unsubscribe();
     }
 

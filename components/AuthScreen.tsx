@@ -59,7 +59,7 @@ export default function AuthScreen({
       const passwordError = validatePassword(password);
       if (passwordError) return onMessage(passwordError, false);
     }
-    await onSubmit({ name: fullName, username: name.trim(), password });
+    await onSubmit({ name: fullName.trim(), username: name.trim(), password });
   };
 
   return (
@@ -86,6 +86,9 @@ export default function AuthScreen({
             type="text"
             placeholder="Username"
             autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             minLength={5}
             maxLength={10}
             required
@@ -97,7 +100,7 @@ export default function AuthScreen({
               id="auth-password"
               type={showPassword ? "text" : "password"}
               placeholder="Password"
-              autoComplete="current-password"
+              autoComplete={isSignUp ? "new-password" : "current-password"}
               minLength={8}
               maxLength={20}
               required
@@ -109,7 +112,7 @@ export default function AuthScreen({
               id="password-toggle"
               className="password-toggle"
               aria-label={showPassword ? "Hide password" : "Show password"}
-              aria-pressed={!showPassword}
+              aria-pressed={showPassword}
               onClick={() => setShowPassword((v) => !v)}
             >
               <svg

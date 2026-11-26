@@ -40,6 +40,12 @@ export default {
   async fetch(request: Request, env: Env, ctx: ScheduledContext): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (pathname === "/api/notify") return handleNotify(request, env, ctx);
+    // Missing hashed bundles or unknown API routes must return 404 rather than
+    // falling through to index.html with 200 OK (which poisons SW asset caches
+    // and breaks dynamic imports with a MIME error).
+    if (pathname.startsWith("/assets/") || pathname.startsWith("/api/")) {
+      return new Response("Not Found", { status: 404 });
+    }
     // Any other path serves the single-page app shell.
     const res = await env.ASSETS.fetch(new Request(new URL("/", request.url)));
 
@@ -51,10 +57,14 @@ export default {
     // can be reused for them.
     if (env.SUPABASE_URL && res.headers.get("content-type")?.includes("text/html")) {
       try {
-        const apiOrigin = new URL(env.SUPABASE_URL).origin;
+        const parsed = new URL(env.SUPABASE_URL);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          return res;
+        }
+        const apiOrigin = parsed.origin;
         const html = await res.text();
         const hint = `<link rel="preconnect" href="${apiOrigin}" crossorigin />\n    `;
-        const injected = html.replace("</head>", `${hint}</head>`);
+        const injected = html.replace("</head>", () => `${hint}</head>`);
         if (injected !== html) {
           const headers = new Headers(res.headers);
           // The body is now our own re-serialized string; stale storage
@@ -79,12 +89,27 @@ export default {
   },
 };
 
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  const len = Math.max(ab.length, bb.length);
+  let diff = ab.length ^ bb.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 async function handleNotify(request: Request, env: Env, ctx: ScheduledContext): Promise<Response> {
   // Simple shared-secret check so random people on the internet can't
   // trigger pushes. Supabase's webhook sends this header value back.
   const secret = request.headers.get("x-notify-secret");
-  if (!env.NOTIFY_SECRET || secret !== env.NOTIFY_SECRET) {
+  if (!env.NOTIFY_SECRET || !secret || !timingSafeEqual(secret, env.NOTIFY_SECRET)) {
     return new Response("Unauthorized", { status: 401 });
+  }
+  if (request.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
   }
 
   let payload;
@@ -150,6 +175,8 @@ async function deliverPushes(message: { sender_id?: string; recipient_id?: strin
   } catch {}
 
   if (subscriptions.length === 0) return;
+
+  if (!env.VAPID_SUBJECT || !env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
 
   const vapid = {
     subject: env.VAPID_SUBJECT,

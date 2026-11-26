@@ -18,6 +18,26 @@ const MAX_VIDEO_HEIGHT = 720; // px, post-transcode (width follows aspect ratio)
 
 export { MAX_IMAGE_DIMENSION, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, MAX_MEDIA_INPUT_BYTES };
 
+// Sanitizes a user-supplied filename for use in a Supabase Storage object key.
+// Storage rejects keys with characters like #, ?, %, non-ASCII unicode, or
+// path separators, and unescaped # / ? in public URLs truncate the fetch path.
+export function sanitizeStorageFilename(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._]+/, "")
+    .replace(/_+$/, "");
+  if (!cleaned) return "file";
+  if (cleaned.length <= 120) return cleaned;
+  const dot = cleaned.lastIndexOf(".");
+  if (dot > 0 && cleaned.length - dot <= 12) {
+    const ext = cleaned.slice(dot);
+    return cleaned.slice(0, 120 - ext.length) + ext;
+  }
+  return cleaned.slice(0, 120);
+}
+
 // "1.2 MB" — label for file chips. Small units get one decimal, larger round
 // to whole numbers.
 export function formatBytes(n: number): string {
@@ -64,14 +84,17 @@ export async function compressImage(file: File): Promise<File> {
 
   try {
     const img = await loadImageFromFile(file);
+    if (!img.width || !img.height) return file;
     const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
-    const width = Math.round(img.width * scale);
-    const height = Math.round(img.height * scale);
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, width, height);
 
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
     if (!blob || blob.size >= file.size) return file;
@@ -84,7 +107,7 @@ export async function compressImage(file: File): Promise<File> {
 }
 
 // ---------- Video/audio transcode ----------
-// Re-encodes video (→ 720p H.264 + low-quality AAC in an MP4) and audio
+// Re-encodes video (→ <=720p H.264 + low-quality AAC in an MP4) and audio
 // (→ low-quality AAC in an .m4a) with mediabunny, which drives the browser's
 // native WebCodecs — hardware-accelerated where available, and far smaller
 // and faster than a wasm FFmpeg. Returns the original file untouched
@@ -101,23 +124,28 @@ export async function compressMedia(file: File): Promise<File> {
     return file; // chunk failed to load — send as-is
   }
 
+  let input: InstanceType<typeof mod.Input> | null = null;
   try {
-    const input = new mod.Input({ formats: mod.ALL_FORMATS, source: new mod.BlobSource(file) });
+    input = new mod.Input({ formats: mod.ALL_FORMATS, source: new mod.BlobSource(file) });
     const output = new mod.Output({
       format: new mod.Mp4OutputFormat(),
       target: new mod.BufferTarget(),
     });
 
     const isVideo = file.type.startsWith("video/");
-    // Setting `quality` forces a transcode; `height` caps the resolution
-    // with the width deduced from the aspect ratio. `tracks: "primary"`
-    // drops secondary/extra tracks (multi-angle video etc.).
+    // Cap video height at 720p without upscaling smaller clips; for audio
+    // files, discard embedded cover-art video tracks so .m4a conversion works.
     const conversion = await mod.Conversion.init({
       input,
       output,
       tracks: "primary",
-      video: isVideo ? { height: MAX_VIDEO_HEIGHT, quality: new mod.Quality("low") } : undefined,
-      audio: { quality: new mod.Quality("low") },
+      video: isVideo
+        ? (track) => ({
+            ...(track.displayHeight > MAX_VIDEO_HEIGHT ? { height: MAX_VIDEO_HEIGHT } : {}),
+            quality: mod.QUALITY_LOW,
+          })
+        : { discard: true },
+      audio: { quality: mod.QUALITY_LOW },
       tags: {},
     });
 
@@ -133,5 +161,9 @@ export async function compressMedia(file: File): Promise<File> {
   } catch (err) {
     console.error("Media compression failed — sending original:", err);
     return file;
+  } finally {
+    try {
+      input?.dispose();
+    } catch {}
   }
 }

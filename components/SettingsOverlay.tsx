@@ -36,7 +36,7 @@ export default function SettingsOverlay({ fade, initialName, onSave, onCancel }:
     setError("");
     setBusy(true);
     try {
-      const saveError = await onSave(name);
+      const saveError = await onSave(name.trim());
       if (saveError) setError(saveError);
       // On success the parent closes the overlay (fade-out).
     } finally {

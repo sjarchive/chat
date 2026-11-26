@@ -61,6 +61,10 @@ interface ChatScreenProps {
   /** Partner id of the open conversation, "" when none. Conversation-change
    * key for the bottom-anchor effect (see pendingAnchor below). */
   convoKey: string;
+  /** Incremented by ChatApp whenever a conversation load should re-anchor
+   * to the latest message after React commits (e.g. cached transcript replaced
+   * by a larger fresh history slice while near bottom). */
+  anchorSeq: number;
   fade: { hidden: boolean; fading: boolean };
   canSend: boolean;
   partnerName: string;
@@ -78,13 +82,14 @@ interface ChatScreenProps {
   onTyping: (value: string) => void;
   onBack: () => void;
   onOpenReply: (msg: MessageView) => void;
-  onQuoteClick: (replyToId: string) => void;
+  onQuoteClick: (replyToId: string) => Promise<unknown> | void;
   registerRow: (id: string, el: HTMLDivElement | null) => void;
 }
 
 const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScreen(
   {
     convoKey,
+    anchorSeq,
     fade,
     canSend,
     partnerName,
@@ -176,17 +181,25 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
   // actually mounts this conversation's rows (the open path clears the list
   // first). Jump-to-bottom and the unseen counter stay in sync with what
   // scrollToBottom() would have done.
-  const anchoredForRef = useRef<string | null>(null);
+  const anchoredKeyRef = useRef<string | null>(null);
+  const lastConvoKeyRef = useRef<string>(convoKey);
   useLayoutEffect(() => {
-    if (convoKey === anchoredForRef.current) return;
+    // Switching conversations (including into an empty chat) clears the
+    // previous anchor marker so returning to the earlier chat still anchors.
+    if (convoKey !== lastConvoKeyRef.current) {
+      lastConvoKeyRef.current = convoKey;
+      anchoredKeyRef.current = null;
+    }
+    const anchorToken = `${convoKey}#${anchorSeq}`;
+    if (anchorToken === anchoredKeyRef.current) return;
     if (rows.length === 0) return;
-    anchoredForRef.current = convoKey;
+    anchoredKeyRef.current = anchorToken;
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     unseenRef.current = 0;
     setUnseenCount(0);
     updateJumpBottom();
-  }, [convoKey, rows, updateJumpBottom]);
+  }, [convoKey, anchorSeq, rows, updateJumpBottom]);
 
   useImperativeHandle(
     ref,
@@ -290,6 +303,15 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
   const errFade = useFade(composerErrorVisible);
   const typingFade = useFade(!!typingText);
 
+  // Retain the last non-null reply content while the strip is fading out so
+  // cancelling a reply does not blank the text before the close animation ends.
+  const lastReplyRef = useRef<{ msg: MessageView | null; name: string }>({ msg: null, name: "" });
+  if (replyingTo) {
+    lastReplyRef.current = { msg: replyingTo, name: replyingName };
+  }
+  const shownReplyMsg = replyingTo ?? (replyFade.hidden ? null : lastReplyRef.current.msg);
+  const shownReplyName = replyingTo ? replyingName : replyFade.hidden ? "" : lastReplyRef.current.name;
+
   // ---------- Reply strip height animation ----------
   // #reply-preview is wrapped in .reply-strip-wrap, whose height eases
   // between 0 and the strip's measured height. The open/close therefore
@@ -332,10 +354,13 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
       // Closing: tween to 0 while the strip fades out — the wrapper's CSS
       // height transition does the moving, so nothing pops afterwards.
       wrap.style.height = "0px";
+    } else {
+      // Settled open — or re-opened mid-close before .hidden ever landed:
+      // make sure the wrapper expands back to the strip's measured height.
+      wrap.style.transition = "";
+      wrap.style.height = `${target}px`;
     }
-    // Fade settled open (fading:false, not hidden): the height is already
-    // pinned to the measured value; nothing to write.
-  }, [replyFade]);
+  }, [replyFade, shownReplyMsg]);
 
   // ---------- Header: tap must not select, hold must ----------
   // On mobile, a tap on the partner's name whose finger drifts a few pixels
@@ -344,7 +369,14 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
   // ever come from a deliberate hold, so when the touch that just ended was
   // short, collapse whatever selection it produced.
   const nameTouchAt = useRef(0);
+  const nameSelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (nameSelTimerRef.current) clearTimeout(nameSelTimerRef.current);
+    };
+  }, []);
   const onNameTouchStart = () => {
+    if (nameSelTimerRef.current) clearTimeout(nameSelTimerRef.current);
     nameTouchAt.current = Date.now();
   };
   const onNameTouchEnd = () => {
@@ -353,7 +385,8 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
     if (Date.now() - nameTouchAt.current >= 400) return;
     // The highlight is painted at touch-up, after this handler runs, so
     // collapsing synchronously could miss it — wait a beat instead.
-    setTimeout(() => {
+    if (nameSelTimerRef.current) clearTimeout(nameSelTimerRef.current);
+    nameSelTimerRef.current = setTimeout(() => {
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed) sel.removeAllRanges();
     }, 50);
@@ -464,10 +497,10 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
           <div id="reply-preview" ref={replyStripRef} className={fadeClass("reply-preview", replyFade)}>
             <div className="reply-preview-info">
               <span id="reply-preview-name" className="reply-preview-name">
-                {replyingName}
+                {shownReplyName}
               </span>
               <span id="reply-preview-text" className="reply-preview-text">
-                {replyingTo ? (replyingTo.body ? truncate(replyingTo.body, 80) : replyingTo.media_path ? attachmentPreview(replyingTo.media_type ?? null) : "") : ""}
+                {shownReplyMsg ? (shownReplyMsg.body ? truncate(shownReplyMsg.body, 80) : shownReplyMsg.media_path ? attachmentPreview(shownReplyMsg.media_type ?? null) : "") : ""}
               </span>
             </div>
             <button type="button" id="reply-preview-cancel" className="icon-button" aria-label="Cancel reply" onClick={onReplyCancel}>
@@ -530,8 +563,16 @@ const ChatScreen = forwardRef<ChatScreenApi, ChatScreenProps>(function ChatScree
 function PresenceDot({ visible }: { visible: boolean }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressRef = useRef(false);
   const shownRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, []);
 
   return (
     <span
@@ -543,6 +584,7 @@ function PresenceDot({ visible }: { visible: boolean }) {
       aria-label="Online"
       onTouchStart={() => {
         if (timerRef.current) clearTimeout(timerRef.current);
+        if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
         shownRef.current = false;
         timerRef.current = setTimeout(() => {
           ref.current?.classList.add("tip-on");
@@ -559,7 +601,8 @@ function PresenceDot({ visible }: { visible: boolean }) {
         if (timerRef.current) clearTimeout(timerRef.current);
         if (shownRef.current) {
           suppressRef.current = true;
-          setTimeout(() => {
+          if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+          hideTimerRef.current = setTimeout(() => {
             ref.current?.classList.remove("tip-on");
             suppressRef.current = false;
           }, 900);

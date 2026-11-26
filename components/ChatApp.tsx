@@ -8,7 +8,21 @@ import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabaseClient } from "@/lib/supabase";
 import { CircleCrypto } from "@/lib/crypto";
 import { resetPushState, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
-import { compressImage, compressMedia, MAX_UPLOAD_BYTES, MAX_BINARY_UPLOAD_BYTES, MAX_MEDIA_INPUT_BYTES, formatBytes } from "@/lib/media";
+import {
+  compressImage,
+  compressMedia,
+  MAX_UPLOAD_BYTES,
+  MAX_BINARY_UPLOAD_BYTES,
+  MAX_MEDIA_INPUT_BYTES,
+  formatBytes,
+  sanitizeStorageFilename,
+} from "@/lib/media";
+import {
+  hasConversationChanged,
+  mergePendingIntoHistory,
+  reconcileResolvedPending,
+  upsertIncomingMessage,
+} from "@/lib/messageState";
 import { applyTheme, readStoredTheme, type Theme } from "@/lib/theme";
 import { fadeClass, FADE_MS, useFade } from "@/lib/fade";
 import { useViewportHeight } from "@/lib/viewport";
@@ -73,6 +87,9 @@ export default function ChatApp() {
   const [chatSummaries, setChatSummaries] = useState<Record<string, ChatSummary>>({});
   const chatSummariesRef = useRef<Record<string, ChatSummary>>({});
   const [messages, setMessages] = useState<MessageView[]>([]);
+  const messagesRef = useRef<MessageView[]>([]);
+  messagesRef.current = messages;
+  const [anchorSeq, setAnchorSeq] = useState(0);
   const conversationLoadSeqRef = useRef(0);
   const pendingOutgoingRef = useRef<MessageView[]>([]);
 
@@ -84,6 +101,7 @@ export default function ChatApp() {
   const profilesChannelSinceRef = useRef(0);
   const presenceChannelSinceRef = useRef(0);
   const typingChannelRef = useRef<RealtimeChannel | null>(null);
+  const typingChannelSinceRef = useRef(0);
   const lastTypingSentRef = useRef(0);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [activeTypers, setActiveTypersState] = useState<Record<string, string>>({});
@@ -326,7 +344,7 @@ export default function ChatApp() {
     if (!user) return;
     const { data, error } = await supabaseClient
       .from("messages")
-      .select("id, sender_id, recipient_id, body, media_path, created_at, seen_at")
+      .select("id, sender_id, recipient_id, body, media_path, media_type, created_at, seen_at")
       .or(`sender_id.eq.${user.id},recipient_id.eq.${user.id}`)
       .order("created_at", { ascending: false })
       .limit(200);
@@ -338,11 +356,12 @@ export default function ChatApp() {
     // latest message as the row preview, and count messages I received but
     // haven't seen.
     const next: Record<string, ChatSummary> = {};
+    const openVisiblePartner = document.visibilityState === "visible" ? currentPartnerRef.current : null;
     for (const msg of rows) {
       const partner = msg.sender_id === user.id ? msg.recipient_id : msg.sender_id;
       const s = next[partner] ?? (next[partner] = { partner, last: null, unread: 0, preview: null });
       if (!s.last) s.last = msg;
-      if (msg.recipient_id === user.id && !msg.seen_at) s.unread++;
+      if (msg.recipient_id === user.id && !msg.seen_at && partner !== openVisiblePartner) s.unread++;
     }
     // Last messages of conversations can be encrypted — resolve each preview
     // (instant no-op for legacy plaintext rows) before painting the list.
@@ -364,15 +383,20 @@ export default function ChatApp() {
 
       if (!s.last || new Date(msg.created_at) >= new Date(s.last.created_at)) {
         nextS.last = msg;
-        // Blank placeholder while the preview decrypts (near-instant for
-        // plaintext); the async resolution below re-renders with real text.
-        nextS.preview = "";
         changed = true;
-        void setSummaryPreview(nextS).then((preview) => {
-          const cur = chatSummariesRef.current[partner];
-          if (!cur || cur.last !== nextS.last) return; // superseded meanwhile
-          applySummaries({ ...chatSummariesRef.current, [partner]: { ...cur, preview } });
-        });
+        const needsDecrypt = typeof msg.body === "string" && msg.body.startsWith("enc:v1:");
+        if (!needsDecrypt) {
+          // Already decrypted (MessageView or plaintext/media) — compute
+          // synchronously so the preview never flashes blank for a frame.
+          nextS.preview = previewText(msg);
+        } else {
+          nextS.preview = "";
+          void setSummaryPreview(nextS).then((preview) => {
+            const cur = chatSummariesRef.current[partner];
+            if (!cur || cur.last !== nextS.last) return; // superseded meanwhile
+            applySummaries({ ...chatSummariesRef.current, [partner]: { ...cur, preview } });
+          });
+        }
       }
       if (msg.recipient_id === user.id && !msg.seen_at && currentPartnerRef.current !== partner) {
         nextS.unread = s.unread + 1;
@@ -403,7 +427,6 @@ export default function ChatApp() {
     // which revokes them at LRU eviction and on sign-out — so switching
     // conversations no longer drops them (and no longer forces every photo /
     // video to re-download and re-decrypt on the next visit).
-    pendingOutgoingRef.current = [];
     setMessages([]);
   }, []);
 
@@ -415,7 +438,6 @@ export default function ChatApp() {
   // load) it behaves exactly like the old reset: an empty list, no stale rows
   // from the previously open conversation.
   const repaintCachedMessages = useCallback((user: string, partner: string) => {
-    pendingOutgoingRef.current = [];
     const cached = Object.values(messageCacheRef.current)
       .filter(
         (m) =>
@@ -423,17 +445,21 @@ export default function ChatApp() {
           ((m.sender_id === user && m.recipient_id === partner) || (m.sender_id === partner && m.recipient_id === user))
       )
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    // Same reasoning as renderAllMessages: no per-row entry animation on a
-    // non-animated batch.
-    setMessages(cached.map((v) => ({ ...v, _animate: false })));
-    return cached.length > 0;
+    const merged = mergePendingIntoHistory(
+      cached.map((v) => ({ ...v, _animate: false })),
+      pendingOutgoingRef.current,
+      user,
+      partner
+    );
+    setMessages(merged);
+    return merged.length > 0;
   }, []);
 
   // Batch render of existing history: no per-row entry animation (see the
   // .animate-in rule) — otherwise the whole list visibly flickers up whenever
   // it re-renders after a refresh.
   const renderAllMessages = useCallback(
-    async (data: MessageRow[], expectedSeq: number): Promise<boolean> => {
+    async (data: MessageRow[], expectedSeq: number, userId: string, partnerId: string): Promise<boolean> => {
       // Decrypt every row first (no-op for legacy plaintext rows) so rows
       // render in order with plaintext bodies, and messageCache holds
       // decrypted views for later quotes. Encrypted photos start
@@ -441,12 +467,17 @@ export default function ChatApp() {
       // placed synchronously here.
       const views = await Promise.all(data.map((row) => CircleCrypto.decryptRow(row)));
       if (expectedSeq !== conversationLoadSeqRef.current) return false;
-      resetMessages();
       for (const v of views) messageCacheRef.current[v.id] = v;
-      setMessages(views.map((v) => ({ ...v, _animate: false })));
+      const merged = mergePendingIntoHistory(
+        views.map((v) => ({ ...v, _animate: false })),
+        pendingOutgoingRef.current,
+        userId,
+        partnerId
+      );
+      setMessages(merged);
       return true;
     },
-    [resetMessages]
+    []
   );
 
   // ---------- Load message history (current conversation) ----------
@@ -533,21 +564,20 @@ export default function ChatApp() {
       // window, so sort after adding it to keep the chronological message
       // order intact.
       messagesList.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      const rendered = await renderAllMessages(messagesList, seq);
+      // Measure whether the user was at the bottom BEFORE replacing the list:
+      // if the cached transcript was shorter (or empty), replacing it with a
+      // taller fresh slice would make a post-commit isNearBottom() check see
+      // scrollTop 0 and leave the view stuck at the oldest message.
+      const shouldAnchor =
+        !includeMessageId &&
+        (messagesRef.current.length === 0 || (chatScreenApiRef.current?.isNearBottom() ?? true));
+      const rendered = await renderAllMessages(messagesList, seq, userAtStart, partnerAtStart);
       if (!rendered) return;
 
-      // Anchor the opened conversation at the newest message. The old
-      // synchronous scrollToBottom() call here was removed: renderAllMessages()
-      // only QUEUES the rows via setMessages — React commits them to the DOM
-      // asynchronously — so that call measured a still-empty list and clamped
-      // to scrollTop 0, and the guarded re-asserts below could never recover
-      // (a freshly-tall list at scrollTop 0 is "not near bottom") — the view
-      // stayed parked on the oldest messages. ChatScreen now anchors itself
-      // in a layout effect keyed on convoKey (post-commit, pre-paint), which
-      // puts the latest message on screen from the first frame. These
-      // re-asserts then just hold the bottom against late height changes
-      // (images/content-visibility resolving), guarded so a user who scrolled
-      // up immediately is never dragged back down.
+      if (shouldAnchor) {
+        setAnchorSeq((n) => n + 1);
+      }
+
       if (!includeMessageId) {
         requestAnimationFrame(() => {
           if (chatScreenApiRef.current?.isNearBottom()) chatScreenApiRef.current?.scrollToBottom();
@@ -568,9 +598,16 @@ export default function ChatApp() {
   // exact message first when no rendered row exists yet.
   const scrollToMessage = useCallback(
     async (id: string, behavior: ScrollBehavior = "smooth") => {
+      const partnerAtStart = currentPartnerRef.current;
       let row = rowRefs.current.get(id) ?? null;
       if (!row) {
         await loadMessages(id);
+        // loadMessages queues React state asynchronously — wait for the new
+        // DOM row to mount and populate rowRefs before measuring it.
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        );
+        if (currentPartnerRef.current !== partnerAtStart) return false;
         row = rowRefs.current.get(id) ?? null;
       }
       // The target may have been deleted or may no longer be visible to this
@@ -585,6 +622,50 @@ export default function ChatApp() {
     },
     [loadMessages]
   );
+
+  // Background re-sync of the currently open conversation (used on tab wake-up
+  // and after a dead realtime channel is rebuilt). Fetches the latest slice and
+  // only touches React state if messages were added/removed or seen_at changed,
+  // avoiding flicker or scroll jumps when nothing was missed.
+  const syncOpenConversation = useCallback(async () => {
+    const partnerAtStart = currentPartnerRef.current;
+    const userAtStart = currentUserRef.current?.id;
+    if (!partnerAtStart || !userAtStart) return;
+    const seq = ++conversationLoadSeqRef.current;
+    const { data, error } = await supabaseClient
+      .from("messages")
+      .select("*")
+      .or(
+        `and(sender_id.eq.${userAtStart},recipient_id.eq.${partnerAtStart}),and(sender_id.eq.${partnerAtStart},recipient_id.eq.${userAtStart})`
+      )
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (seq !== conversationLoadSeqRef.current || currentPartnerRef.current !== partnerAtStart) return;
+    if (error) return console.error(error);
+
+    const fresh = ((data ?? []) as MessageRow[]).sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    if (!hasConversationChanged(messagesRef.current, fresh)) return;
+
+    const existingIds = new Set(messagesRef.current.map((m) => m.id));
+    const newlyArrivedFromPartner = fresh.filter(
+      (m) => m.sender_id === partnerAtStart && !existingIds.has(m.id)
+    ).length;
+    const wasNearBottom =
+      messagesRef.current.length === 0 || (chatScreenApiRef.current?.isNearBottom() ?? true);
+
+    const rendered = await renderAllMessages(fresh, seq, userAtStart, partnerAtStart);
+    if (!rendered) return;
+
+    if (wasNearBottom) {
+      setAnchorSeq((n) => n + 1);
+    } else if (newlyArrivedFromPartner > 0) {
+      for (let i = 0; i < newlyArrivedFromPartner; i++) {
+        chatScreenApiRef.current?.bumpUnseen();
+      }
+    }
+  }, [renderAllMessages]);
 
   // ---------- Read receipts ----------
   // Marks everything my partner sent me in this conversation as seen. Called
@@ -605,46 +686,66 @@ export default function ChatApp() {
   // ---------- Optimistic sends ----------
   // Removes an optimistic bubble that never made it to the server (send
   // failed).
-  const removePendingMessage = useCallback((tempId: string) => {
-    const failed = messageCacheRef.current[tempId];
-    // The optimistic bubble is dropped everywhere below, so its local
-    // preview URL has no viewer left — free it (rare path, but a failed
-    // send shouldn't leak a multi-megabyte blob).
-    if (failed?._localBlobUrl) URL.revokeObjectURL(failed._localBlobUrl);
-    pendingOutgoingRef.current = pendingOutgoingRef.current.filter((m) => m.id !== tempId);
-    setMessages((prev) => (prev.some((m) => m.id === tempId) ? prev.filter((m) => m.id !== tempId) : prev));
-    delete messageCacheRef.current[tempId];
-  }, []);
+  const removePendingMessage = useCallback(
+    (tempId: string) => {
+      const failed = messageCacheRef.current[tempId];
+      // The optimistic bubble is dropped everywhere below, so its local
+      // preview URL has no viewer left — free it (rare path, but a failed
+      // send shouldn't leak a multi-megabyte blob).
+      if (failed?._localBlobUrl) URL.revokeObjectURL(failed._localBlobUrl);
+      pendingOutgoingRef.current = pendingOutgoingRef.current.filter((m) => m.id !== tempId);
+      setMessages((prev) => (prev.some((m) => m.id === tempId) ? prev.filter((m) => m.id !== tempId) : prev));
+      delete messageCacheRef.current[tempId];
+      if (replyingToRef.current?.id === tempId) {
+        setReplying(null);
+      }
+      // If the failed optimistic send had been shown as the latest preview in
+      // the chats list, resync summaries so the unsent message doesn't stick.
+      if (failed && chatSummariesRef.current[failed.recipient_id]?.last?.id === tempId) {
+        resyncChatSummariesSoon();
+      }
+    },
+    [resyncChatSummariesSoon, setReplying]
+  );
 
   // Swaps an optimistic bubble's temp id for the real one once the insert
-  // confirms, and clears its faded/pending tick. Mutates optimisticMsg in
-  // place (rather than replacing it) so anything already holding a reference
-  // to it — e.g. a reply preview started against it — picks up the real id
-  // automatically.
-  const resolvePendingMessage = useCallback((optimisticMsg: MessageView, realMsg: MessageRow) => {
-    const tempId = optimisticMsg.id;
-    pendingOutgoingRef.current = pendingOutgoingRef.current.filter((m) => m.id !== tempId);
-    delete messageCacheRef.current[tempId];
+  // confirms, and clears its faded/pending tick. Idempotent: if Realtime beat
+  // the HTTP insert response and already resolved this tempId, the second call
+  // is a safe no-op instead of deleting the confirmed message.
+  const resolvePendingMessage = useCallback(
+    (
+      tempId: string,
+      optimisticMsg: MessageView,
+      realMsg: MessageRow | MessageView,
+      plaintextOverrides?: Partial<Pick<MessageView, "body" | "_mk" | "_mi" | "_encrypted">>
+    ) => {
+      const alreadyResolved = !optimisticMsg._pending && optimisticMsg.id === realMsg.id;
+      pendingOutgoingRef.current = pendingOutgoingRef.current.filter((m) => m.id !== tempId && m.id !== realMsg.id);
+      if (tempId !== realMsg.id) {
+        delete messageCacheRef.current[tempId];
+      }
 
-    if (rowRefs.current.has(realMsg.id)) {
-      // Realtime's echo of this same insert already rendered it first (rare
-      // race) — drop the now-redundant optimistic bubble instead of showing
-      // the message twice.
-      setMessages((prev) => (prev.some((m) => m.id === tempId) ? prev.filter((m) => m.id !== tempId) : prev));
-      return;
-    }
+      Object.assign(optimisticMsg, realMsg, plaintextOverrides ?? {}, { _pending: false, _animate: false });
+      messageCacheRef.current[optimisticMsg.id] = optimisticMsg;
 
-    Object.assign(optimisticMsg, realMsg, { _pending: false, _animate: false });
-    messageCacheRef.current[optimisticMsg.id] = optimisticMsg;
-    setMessages((prev) => prev.map((m) => (m.id === tempId ? optimisticMsg : m)));
-    // The row's local preview blob holds exactly the bytes that were
-    // uploaded — hand it to the decrypted-media cache under the newly
-    // confirmed storage path, so the row (and any later re-render) reuses
-    // that URL instead of re-downloading the just-sent file.
-    if (realMsg.media_path && optimisticMsg._localBlobUrl) {
-      CircleCrypto.cacheMediaUrl(realMsg.media_path, optimisticMsg._localBlobUrl, optimisticMsg._fileSize ?? 0);
-    }
-  }, []);
+      if (replyingToRef.current?.id === tempId) {
+        setReplying({ ...optimisticMsg });
+      }
+
+      if (!alreadyResolved) {
+        setMessages((prev) => reconcileResolvedPending(prev, tempId, optimisticMsg));
+      }
+
+      // The row's local preview blob holds exactly the bytes that were
+      // uploaded — hand it to the decrypted-media cache under the newly
+      // confirmed storage path, so the row (and any later re-render) reuses
+      // that URL instead of re-downloading the just-sent file.
+      if (realMsg.media_path && optimisticMsg._localBlobUrl) {
+        CircleCrypto.cacheMediaUrl(realMsg.media_path, optimisticMsg._localBlobUrl, optimisticMsg._fileSize ?? 0);
+      }
+    },
+    [setReplying]
+  );
 
   // ---------- Typing indicator (Realtime broadcast, no DB writes) ----------
   // One broadcast channel per user pair, so typing signals stay within that
@@ -671,6 +772,7 @@ export default function ChatApp() {
       })
       .subscribe();
     typingChannelRef.current = channel;
+    typingChannelSinceRef.current = Date.now();
   }, [pairChannelName]);
 
   function showTyping(userId: string, name: string): void {
@@ -721,7 +823,7 @@ export default function ChatApp() {
       // If Realtime delivers our own insert before the HTTP .insert().select()
       // response resolves, bind it to the matching pending optimistic bubble
       // in-place instead of rendering a second bubble.
-      if (mine && isOpenConversation && !rowRefs.current.has(msg.id) && pendingOutgoingRef.current.length > 0) {
+      if (mine && !messageCacheRef.current[msg.id] && pendingOutgoingRef.current.length > 0) {
         const idx = pendingOutgoingRef.current.findIndex(
           (p) =>
             p.recipient_id === msg.recipient_id &&
@@ -729,7 +831,8 @@ export default function ChatApp() {
         );
         if (idx !== -1) {
           const pendingMsg = pendingOutgoingRef.current.splice(idx, 1)[0];
-          resolvePendingMessage(pendingMsg, msg);
+          const pendingTempId = pendingMsg.id;
+          resolvePendingMessage(pendingTempId, pendingMsg, msg);
           updateChatSummaryFor(pendingMsg);
           return;
         }
@@ -739,11 +842,12 @@ export default function ChatApp() {
       // composer's optimistic render below) — when Realtime's echo of that
       // same insert arrives a moment later, skip re-rendering it so it
       // doesn't show up twice.
-      if (isOpenConversation && !rowRefs.current.has(msg.id)) {
+      const alreadyKnown = Boolean(messageCacheRef.current[msg.id]) || rowRefs.current.has(msg.id);
+      if (isOpenConversation && !alreadyKnown) {
         if (!profileCacheRef.current[msg.sender_id]) void ensureProfileCached(msg.sender_id);
         const wasNearBottom = chatScreenApiRef.current?.isNearBottom() ?? true;
         messageCacheRef.current[msg.id] = msg;
-        setMessages((prev) => [...prev, { ...msg, _animate: true }]);
+        setMessages((prev) => upsertIncomingMessage(prev, { ...msg, _animate: true }));
         // The scroll must wait for React to commit the new row (state updates
         // are async) — one animation frame lands after the commit.
         requestAnimationFrame(() => {
@@ -791,7 +895,10 @@ export default function ChatApp() {
       const user = currentUserRef.current;
       const targetPartner = currentPartnerRef.current;
       if (!text || !targetPartner || !user) return;
-      const replyId = replyingToRef.current?.id ?? null;
+      const rawReply = replyingToRef.current;
+      // Never send an unconfirmed client-only "pending-..." id as reply_to
+      // (Postgres expects a real message UUID).
+      const replyId = rawReply && !rawReply._pending && !rawReply.id.startsWith("pending-") ? rawReply.id : null;
       hideComposerError();
 
       // Show the bubble immediately (WhatsApp/Telegram-style) instead of
@@ -852,19 +959,20 @@ export default function ChatApp() {
         // bubble and put the text back so nothing is lost. The reply context
         // was never cancelled, so it stays for the retry.
         removePendingMessage(tempId);
-        chatScreenApiRef.current?.putText(text);
-        showComposerError("Couldn't send — check your connection and try again.");
+        if (currentPartnerRef.current === targetPartner) {
+          chatScreenApiRef.current?.putText(text);
+          showComposerError("Couldn't send — check your connection and try again.");
+        }
       } else {
-        resolvePendingMessage(optimisticMsg, data as MessageRow);
-        // data.body is the stored ciphertext; the in-memory view keeps the
-        // plaintext we already rendered (same object reference, so anything
-        // holding it — quotes, reply preview — sees readable text).
-        optimisticMsg.body = text;
+        resolvePendingMessage(tempId, optimisticMsg, data as MessageRow, {
+          body: text,
+          _encrypted: Boolean(notify),
+        });
         // The optimistic entry above used a client timestamp; now that the
         // real row is back (with its server id/created_at), refresh the
         // preview from it.
         updateChatSummaryFor(optimisticMsg);
-        cancelReply();
+        if (currentPartnerRef.current === targetPartner) cancelReply();
       }
     },
     [cancelReply, hideComposerError, removePendingMessage, resolvePendingMessage, showComposerError, updateChatSummaryFor]
@@ -876,6 +984,8 @@ export default function ChatApp() {
       const user = currentUserRef.current;
       const targetPartner = currentPartnerRef.current;
       if (!file || !targetPartner || !user) return;
+      const rawReply = replyingToRef.current;
+      const replyId = rawReply && !rawReply._pending && !rawReply.id.startsWith("pending-") ? rawReply.id : null;
       hideComposerError();
 
       // Everything gets compressed before upload: photos via canvas (JPEG),
@@ -895,20 +1005,25 @@ export default function ChatApp() {
       }
 
       const upload = isImage ? await compressImage(file) : isVideo || isAudio ? await compressMedia(file) : file;
+      if (currentUserRef.current?.id !== user.id) return; // signed out during transcode
 
       // Images are capped after compression (the 2MB post-compress limit);
       // every other kind under a bigger raw cap.
       if (isImage && upload.size > MAX_UPLOAD_BYTES) {
-        showComposerError("That image is too large even after compression — please choose a smaller one.");
+        if (currentPartnerRef.current === targetPartner) {
+          showComposerError("That image is too large even after compression — please choose a smaller one.");
+        }
         return;
       }
       if (!isImage && upload.size > MAX_BINARY_UPLOAD_BYTES) {
-        showComposerError(`That file is too large even after compression — the limit is ${formatBytes(MAX_BINARY_UPLOAD_BYTES)}.`);
+        if (currentPartnerRef.current === targetPartner) {
+          showComposerError(`That file is too large even after compression — the limit is ${formatBytes(MAX_BINARY_UPLOAD_BYTES)}.`);
+        }
         return;
       }
 
-      const replyId = replyingToRef.current?.id ?? null;
-      const path = `${user.id}/${Date.now()}-${upload.name}`;
+      const safeFilename = sanitizeStorageFilename(upload.name);
+      const path = `${user.id}/${Date.now()}-${safeFilename}`;
       // The label is the encrypted row body: push-preview text and what
       // quotes/summaries show. Generic files carry their filename instead
       // of a kind emoji.
@@ -943,34 +1058,39 @@ export default function ChatApp() {
       }
       updateChatSummaryFor(optimisticMsg);
 
-      // E2EE: encrypt the attachment bytes with a one-off AES key before
-      // upload — Storage only ever holds ciphertext. The key travels inside
-      // the encrypted message payload below.
+      // E2EE: only encrypt the attachment bytes when the recipient has a
+      // published public key to receive the AES key. Otherwise fall back to
+      // plaintext upload (matching text messages) instead of uploading
+      // permanently unreadable ciphertext with a discarded key.
       let uploadData: Blob = upload;
       let mk: string | null = null;
       let mi: string | null = null;
-      if (CircleCrypto.ready()) {
-        const enc = await CircleCrypto.encryptFileForSend(upload);
-        uploadData = enc.data;
-        mk = enc.mk;
-        mi = enc.mi;
+      let rowBody: string | null = null;
+      let notify: string | null = null;
+      if (await CircleCrypto.canEncryptFor(targetPartner)) {
+        const encFile = await CircleCrypto.encryptFileForSend(upload);
+        const encMsg = await CircleCrypto.encryptOutgoing(
+          targetPartner,
+          { b: null, mk: encFile.mk, mi: encFile.mi },
+          label
+        );
+        if (encMsg) {
+          uploadData = encFile.data;
+          mk = encFile.mk;
+          mi = encFile.mi;
+          rowBody = encMsg.body;
+          notify = encMsg.notify;
+        }
       }
+
       const { error: uploadError } = await supabaseClient.storage.from("chat-media").upload(path, uploadData);
       if (uploadError) {
         console.error(uploadError);
         removePendingMessage(tempId);
-        showComposerError("Couldn't upload the attachment — check your connection and try again.");
-        return; // no message row was created, so the reply context can stay put
-      }
-
-      let rowBody: string | null = null;
-      let notify: string | null = null;
-      if (CircleCrypto.ready() && mk) {
-        const enc = await CircleCrypto.encryptOutgoing(targetPartner, { b: null, mk, mi }, label);
-        if (enc) {
-          rowBody = enc.body;
-          notify = enc.notify;
+        if (currentPartnerRef.current === targetPartner) {
+          showComposerError("Couldn't upload the attachment — check your connection and try again.");
         }
+        return; // no message row was created, so the reply context can stay put
       }
 
       const { data, error } = await supabaseClient
@@ -989,12 +1109,16 @@ export default function ChatApp() {
       if (error) {
         console.error(error);
         removePendingMessage(tempId);
-        showComposerError("The attachment uploaded, but the message couldn't be sent. Try attaching it again.");
+        if (currentPartnerRef.current === targetPartner) {
+          showComposerError("The attachment uploaded, but the message couldn't be sent. Try attaching it again.");
+        }
       } else {
-        resolvePendingMessage(optimisticMsg, data as MessageRow);
-        optimisticMsg.body = null;
-        optimisticMsg._mk = mk;
-        optimisticMsg._mi = mi;
+        resolvePendingMessage(tempId, optimisticMsg, data as MessageRow, {
+          body: null,
+          _encrypted: Boolean(rowBody),
+          _mk: mk,
+          _mi: mi,
+        });
         updateChatSummaryFor(optimisticMsg);
         if (currentPartnerRef.current === targetPartner) cancelReply();
       }
@@ -1063,6 +1187,7 @@ export default function ChatApp() {
   }, []);
 
   const onAuthToggle = useCallback(() => {
+    justSignedUpRef.current = false;
     const next: AuthMode = authModeRef.current === "signup" ? "signin" : "signup";
     authModeRef.current = next;
     setAuthMode(next);
@@ -1079,7 +1204,7 @@ export default function ChatApp() {
       try {
         if (authModeRef.current === "signup") {
           justSignedUpRef.current = true;
-          const { error } = await supabaseClient.auth.signUp({
+          const { data: signUpData, error } = await supabaseClient.auth.signUp({
             email: fakeEmail,
             password,
             // display_name drives what shows on message bubbles / typing
@@ -1090,8 +1215,18 @@ export default function ChatApp() {
             options: { data: { display_name: name, username } },
           });
           if (error) throw error;
-          // The SIGNED_IN event this triggers is handled by onAuthStateChange,
-          // which signs back out and shows the login form — nothing more here.
+          if (signUpData.user && Array.isArray(signUpData.user.identities) && signUpData.user.identities.length === 0) {
+            throw new Error("User already registered");
+          }
+          if (!signUpData.session) {
+            justSignedUpRef.current = false;
+            switchToSignInMode({
+              prefillUsername: username,
+              message: "Account created — sign in to continue.",
+            });
+          }
+          // Otherwise the SIGNED_IN event this triggers is handled by
+          // onAuthStateChange, which signs back out and shows the login form.
         } else {
           // Set before the call: the SIGNED_IN event (and thus enterApp) can
           // fire before signInWithPassword's promise resolves.
@@ -1113,7 +1248,7 @@ export default function ChatApp() {
         setAuthBusy(false);
       }
     },
-    []
+    [switchToSignInMode]
   );
 
   // Stop this browser from receiving pushes on logout (see lib/push.ts).
@@ -1313,11 +1448,26 @@ export default function ChatApp() {
     setPartner(null);
     CircleCrypto.clearSession();
     closeConversation();
+    for (const p of pendingOutgoingRef.current) {
+      if (p._localBlobUrl) URL.revokeObjectURL(p._localBlobUrl);
+    }
+    pendingOutgoingRef.current = [];
     resetMessages();
     // Decrypted content from the previous account must not outlive the
     // session (media blobs are already revoked inside clearSession).
     messageCacheRef.current = {};
+    usernameCacheRef.current = {};
+    applyProfileCache({});
     applySummaries({});
+    closeSettings();
+    cancelReply();
+    hideComposerError();
+    setSearchTerm("");
+    hideSearchResults();
+    if (summaryResyncTimerRef.current) {
+      clearTimeout(summaryResyncTimerRef.current);
+      summaryResyncTimerRef.current = null;
+    }
     // Leaving also stops broadcasting presence: removing the channel sends
     // the leave, so other users' dots go gray immediately rather than
     // waiting for the socket to time out. Clear the local set too so no dot
@@ -1328,7 +1478,9 @@ export default function ChatApp() {
     }
     setOnlineUsers(new Set());
     resetPushState();
+    setHeadOverrides(false);
     document.documentElement.classList.remove("has-session");
+    document.documentElement.classList.remove("has-open-chat");
     // Desktop two-pane: drop the signed-in shell so the desktop layout CSS
     // stops force-showing the chats list next to the auth screen.
     document.documentElement.classList.remove("app-visible");
@@ -1336,7 +1488,19 @@ export default function ChatApp() {
     setChatsShown(false);
     setChatShown(false);
     setAppHeight();
-  }, [applySummaries, closeConversation, resetMessages, setAppHeight, setPartner, setUser]);
+  }, [
+    applyProfileCache,
+    applySummaries,
+    cancelReply,
+    closeConversation,
+    closeSettings,
+    hideComposerError,
+    hideSearchResults,
+    resetMessages,
+    setAppHeight,
+    setPartner,
+    setUser,
+  ]);
 
   // Someone was deleted from Supabase auth. For everyone else this removes
   // their name, chat entries and any open conversation with them on the
@@ -1402,7 +1566,9 @@ export default function ChatApp() {
         if (!user || (msg.sender_id !== user.id && msg.recipient_id !== user.id)) return;
         // Encrypted rows are decrypted into a "view" before anything renders
         // or is cached (legacy plaintext rows pass through untouched).
-        handleIncomingMessage(await CircleCrypto.decryptRow(msg));
+        const decrypted = await CircleCrypto.decryptRow(msg);
+        if (currentUserRef.current?.id !== user.id) return;
+        handleIncomingMessage(decrypted);
       })
       // Read receipts: the recipient marking my messages seen flips my
       // single tick to a double tick in place.
@@ -1410,7 +1576,9 @@ export default function ChatApp() {
         const msg = payload.new as MessageRow;
         const user = currentUserRef.current;
         if (!msg.seen_at || payload.old?.seen_at || !user) return;
-        if (messageCacheRef.current[msg.id]) messageCacheRef.current[msg.id].seen_at = msg.seen_at;
+        const cached = messageCacheRef.current[msg.id];
+        if (cached?.seen_at) return;
+        if (cached) cached.seen_at = msg.seen_at;
         setMessages((prev) =>
           prev.some((m) => m.id === msg.id)
             ? prev.map((m) => (m.id === msg.id ? { ...m, seen_at: msg.seen_at } : m))
@@ -1445,6 +1613,7 @@ export default function ChatApp() {
         if (!id) return;
         setMessages((prev) => (prev.some((m) => m.id === id) ? prev.filter((m) => m.id !== id) : prev));
         delete messageCacheRef.current[id];
+        if (replyingToRef.current?.id === id) cancelReply();
         for (const partner of Object.keys(chatSummariesRef.current)) {
           if (chatSummariesRef.current[partner].last?.id === id) {
             resyncChatSummariesSoon();
@@ -1453,7 +1622,7 @@ export default function ChatApp() {
         }
       })
       .subscribe();
-  }, [applySummaries, handleIncomingMessage, resyncChatSummariesSoon, updateChatSummaryFor]);
+  }, [applySummaries, cancelReply, handleIncomingMessage, resyncChatSummariesSoon, updateChatSummaryFor]);
 
   // Someone renaming themselves in Settings should show up in everyone's
   // open tab immediately. The original patched DOM nodes in place to avoid
@@ -1463,10 +1632,11 @@ export default function ChatApp() {
     return supabaseClient
       .channel("public:profiles")
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "profiles" }, (payload) => {
-        const { id, display_name, username } = payload.new as Profile;
-        // Cache the username before the display-name early return below so
-        // a username-only change still lands (and can't be missed).
+        const { id, display_name, username, public_key } = payload.new as Profile;
+        // Cache username and E2EE public key before the display-name early
+        // return below so key-only or username-only updates still land.
         if (id && username) usernameCacheRef.current = { ...usernameCacheRef.current, [id]: username };
+        if (id && public_key) CircleCrypto.cachePublicKey(id, public_key);
         if (!id || profileCacheRef.current[id] === display_name) return;
         applyProfileCache({ ...profileCacheRef.current, [id]: display_name });
         // A rename mid-typing should update the "… is typing" text too
@@ -1515,10 +1685,12 @@ export default function ChatApp() {
   // path, but the UI would stay stale until a manual refresh. A healthy
   // "joined" channel is left untouched; sign out/in within the tab reuses it
   // (supabase-js feeds the current token to the socket on every auth change).
-  const ensureRealtime = useCallback(() => {
+  const ensureRealtime = useCallback((): boolean => {
+    let rebuiltMessages = false;
     if (channelIsDead(messagesChannelRef.current, messagesChannelSinceRef.current)) {
       supabaseClient.removeChannel(messagesChannelRef.current!).catch(() => {});
       messagesChannelRef.current = null;
+      rebuiltMessages = true;
     }
     if (channelIsDead(profilesChannelRef.current, profilesChannelSinceRef.current)) {
       supabaseClient.removeChannel(profilesChannelRef.current!).catch(() => {});
@@ -1527,6 +1699,9 @@ export default function ChatApp() {
     if (channelIsDead(presenceChannelRef.current, presenceChannelSinceRef.current)) {
       supabaseClient.removeChannel(presenceChannelRef.current!).catch(() => {});
       presenceChannelRef.current = null;
+    }
+    if (currentPartnerRef.current && channelIsDead(typingChannelRef.current, typingChannelSinceRef.current)) {
+      subscribeTyping();
     }
     if (!messagesChannelRef.current) {
       messagesChannelRef.current = buildMessagesChannel();
@@ -1540,7 +1715,8 @@ export default function ChatApp() {
       presenceChannelRef.current = buildPresenceChannel();
       presenceChannelSinceRef.current = Date.now();
     }
-  }, [buildMessagesChannel, buildProfilesChannel, buildPresenceChannel]);
+    return rebuiltMessages;
+  }, [buildMessagesChannel, buildProfilesChannel, buildPresenceChannel, subscribeTyping]);
 
   function channelIsDead(channel: RealtimeChannel | null, since: number): boolean {
     if (!channel) return false;
@@ -1652,7 +1828,9 @@ export default function ChatApp() {
   // Theme is applied pre-paint by the inline <head> script (layout.tsx);
   // sync the React state with it once mounted.
   useEffect(() => {
-    setThemeState(readStoredTheme());
+    const stored = readStoredTheme();
+    applyTheme(stored);
+    setThemeState(stored);
   }, []);
 
   const onToggleTheme = useCallback(() => {
@@ -1733,7 +1911,7 @@ export default function ChatApp() {
     const onPop = (e: PopStateEvent) => {
       if (currentPartnerRef.current && !e.state?.circleChat) {
         goBackToChats();
-      } else if (!currentPartnerRef.current && e.state?.circleChat) {
+      } else if (e.state?.circleChat && e.state.circleChat !== currentPartnerRef.current) {
         void openConversation(e.state.circleChat, true);
       }
     };
@@ -1760,21 +1938,22 @@ export default function ChatApp() {
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === "visible") {
-        // Messages that arrived while the tab was hidden (so weren't marked
-        // seen) get read now that the user is actually looking at the chat.
-        if (currentPartnerRef.current) void markConversationSeen();
         // The realtime socket may not have survived the tab being suspended:
-        // rebuild dead channels and re-sync the list instead of sitting
-        // stale.
+        // rebuild dead channels, re-sync the open conversation (catching any
+        // messages/read receipts missed while asleep), and refresh summaries.
         if (currentUserRef.current) {
           ensureRealtime();
           void loadChatSummaries();
+        }
+        if (currentPartnerRef.current) {
+          void syncOpenConversation();
+          void markConversationSeen();
         }
       }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [ensureRealtime, loadChatSummaries, markConversationSeen]);
+  }, [ensureRealtime, loadChatSummaries, markConversationSeen, syncOpenConversation]);
 
   // ---------- Periodic background sync ----------
   // Safety net under realtime, running only while the tab is visible:
@@ -1787,12 +1966,13 @@ export default function ChatApp() {
   useEffect(() => {
     const id = setInterval(() => {
       if (!currentUserRef.current || document.visibilityState !== "visible") return;
-      ensureRealtime();
+      const rebuilt = ensureRealtime();
+      if (rebuilt && currentPartnerRef.current) void syncOpenConversation();
       void verifyAccountExists();
       void loadChatSummaries();
     }, 30000);
     return () => clearInterval(id);
-  }, [ensureRealtime, loadChatSummaries, verifyAccountExists]);
+  }, [ensureRealtime, loadChatSummaries, syncOpenConversation, verifyAccountExists]);
 
   // Detach channels when the app unmounts entirely (dev HMR etc.).
   useEffect(() => {
@@ -1855,6 +2035,7 @@ export default function ChatApp() {
           // keys its bottom-anchor layout effect off this so re-opening any
           // chat — even the same one — lands on the newest message.
           convoKey={currentPartner ?? ""}
+          anchorSeq={anchorSeq}
           fade={chatFade}
           canSend={!!currentPartner && !!currentUser}
           partnerName={partnerName}
@@ -1872,7 +2053,7 @@ export default function ChatApp() {
           onTyping={onTyping}
           onBack={onBack}
           onOpenReply={startReply}
-          onQuoteClick={(id) => void scrollToMessage(id)}
+          onQuoteClick={(id) => scrollToMessage(id)}
           registerRow={registerRow}
         />
 

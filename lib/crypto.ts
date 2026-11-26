@@ -45,6 +45,11 @@ const pubKeyCache: Record<string, string> = {}; // userId -> base64 public key
 // round trip per message. Cleared whenever a different private key is
 // adopted (sign-in as another user), which invalidates every entry.
 const aesKeyCache: Record<string, CryptoKey> = {};
+// Incremented on sign-out so an in-flight media download/decryption that
+// finishes after clearSession() revokes its blob URL instead of caching it
+// into the next session.
+let sessionEpoch = 0;
+const mediaDecryptInFlight = new Map<string, Promise<{ url: string; size: number } | null>>();
 
 // ---------- encoding helpers ----------
 function b64(bytes: Uint8Array | ArrayBuffer): string {
@@ -127,6 +132,7 @@ async function idbDelete(key: string): Promise<void> {
 }
 
 function clearSession(): void {
+  sessionEpoch++;
   myUserId = null;
   myPriv = null;
   myPubRaw = null;
@@ -244,6 +250,14 @@ async function setupKeys(userId: string, password: string | null): Promise<boole
 
 function ready(): boolean {
   return !!myPriv;
+}
+
+// True when both this device and the recipient have E2EE keys available.
+// Used before encrypting attachment bytes so we never upload unreadable
+// ciphertext for a recipient who has no published public key yet.
+async function canEncryptFor(partnerId: string): Promise<boolean> {
+  if (!ready()) return false;
+  return Boolean(await fetchPublicKey(partnerId));
 }
 
 // Lets the page prime the cache with public keys it already fetched.
@@ -371,6 +385,11 @@ const MEDIA_URL_REVOKE_DELAY_MS = 120000;
 const mediaUrlCache = new Map<string, { url: string; size: number }>();
 
 function cacheMediaUrl(path: string, url: string, size: number): void {
+  const prev = mediaUrlCache.get(path);
+  if (prev && prev.url !== url) {
+    const prevUrl = prev.url;
+    setTimeout(() => URL.revokeObjectURL(prevUrl), MEDIA_URL_REVOKE_DELAY_MS);
+  }
   mediaUrlCache.delete(path);
   mediaUrlCache.set(path, { url, size });
   trimMediaCache();
@@ -413,25 +432,38 @@ async function decryptMedia(
     mediaUrlCache.set(mediaPath, cached); // bump recency
     return cached;
   }
-  try {
-    const publicUrl = supabaseClient.storage.from("chat-media").getPublicUrl(mediaPath).data.publicUrl;
-    const res = await fetch(publicUrl);
-    if (!res.ok) return null;
-    const key = await crypto.subtle.importKey("raw", unb64(mkB64), { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(miB64) }, key, await res.arrayBuffer());
-    const blob = new Blob([plain], { type: mime || "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    cacheMediaUrl(mediaPath, url, blob.size);
-    return { url, size: blob.size };
-  } catch (err) {
-    console.error(err);
-    return null;
-  }
+  const existing = mediaDecryptInFlight.get(mediaPath);
+  if (existing) return existing;
+
+  const epoch = sessionEpoch;
+  const promise = (async (): Promise<{ url: string; size: number } | null> => {
+    try {
+      const publicUrl = supabaseClient.storage.from("chat-media").getPublicUrl(mediaPath).data.publicUrl;
+      const res = await fetch(publicUrl);
+      if (!res.ok) return null;
+      const key = await crypto.subtle.importKey("raw", unb64(mkB64), { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(miB64) }, key, await res.arrayBuffer());
+      if (epoch !== sessionEpoch) return null;
+      const blob = new Blob([plain], { type: mime || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      cacheMediaUrl(mediaPath, url, blob.size);
+      return { url, size: blob.size };
+    } catch (err) {
+      console.error(err);
+      return null;
+    } finally {
+      mediaDecryptInFlight.delete(mediaPath);
+    }
+  })();
+
+  mediaDecryptInFlight.set(mediaPath, promise);
+  return promise;
 }
 
 export const CircleCrypto = {
   setupKeys,
   ready,
+  canEncryptFor,
   clearSession,
   cachePublicKey,
   encryptOutgoing,
