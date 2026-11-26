@@ -18,7 +18,7 @@ components/
   icons.tsx            # shared inline SVGs (ticks, icons)
 lib/
   supabase.ts          # client singleton (localStorage sessions, as before)
-  crypto.ts            # CircleCrypto — E2EE port
+  crypto.ts            # CircleCrypto — E2EE (owner-only user_key_backups)
   push.ts              # SW registration + push subscribe/unsubscribe
   media.ts             # attachment compression/size caps before upload
   messageState.ts, theme.tsx, fade.ts, viewport.ts, utils.ts, types.ts
