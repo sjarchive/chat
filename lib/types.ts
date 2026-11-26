@@ -6,7 +6,6 @@ export interface Profile {
   display_name: string;
   username: string | null;
   public_key: string | null;
-  enc_private_key?: string | null;
 }
 
 /** Raw `messages` row, exactly as stored in Postgres. */

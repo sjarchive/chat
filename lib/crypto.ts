@@ -4,7 +4,7 @@
 // Model:
 //   Every user has an ECDH P-256 keypair. The public key is published in
 //   profiles.public_key; the private key lives on the device (localStorage)
-//   and is ALSO stored in profiles.enc_private_key wrapped with a key derived
+//   and is ALSO stored in owner-only user_key_backups.enc_private_key wrapped with a key derived
 //   from the login password (PBKDF2), so a new device can recover it at
 //   login. That is why the password must be typed once per device — Supabase
 //   never sees the unwrapped key, but does see the password at login, which
@@ -196,25 +196,25 @@ async function setupKeys(userId: string, password: string | null): Promise<boole
     }
 
     let jwk: JsonWebKey | null = null;
-    const { data: profile, error } = await supabaseClient
-      .from("profiles")
-      .select("public_key, enc_private_key")
-      .eq("id", userId)
+    const { data: backup, error } = await supabaseClient
+      .from("user_key_backups")
+      .select("enc_private_key")
+      .eq("user_id", userId)
       .maybeSingle();
     if (error) throw error;
 
-    if (profile && profile.enc_private_key && password) {
+    if (backup && backup.enc_private_key && password) {
       // Recovering the key on a new device: unwrap the stored blob with the
       // login password. Auth already verified the password is correct, so a
       // failure here means the blob itself is unusable.
-      const blob = JSON.parse(decoder.decode(unb64(profile.enc_private_key)));
+      const blob = JSON.parse(decoder.decode(unb64(backup.enc_private_key)));
       const wrapKey = await passwordWrapKey(password, userId, ["decrypt"]);
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, wrapKey, unb64(blob.ct));
       jwk = JSON.parse(decoder.decode(plain));
     } else if (password) {
       // First login since E2EE was enabled (new or pre-existing account):
-      // generate a keypair, publish the public half, and store the private
-      // half wrapped with the password so other devices can recover it.
+      // generate a keypair, store the password-wrapped private half in the
+      // owner-only user_key_backups table, and publish the public half on profiles.
       const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
       jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
       const publishedPub = b64(await crypto.subtle.exportKey("raw", pair.publicKey));
@@ -222,9 +222,13 @@ async function setupKeys(userId: string, password: string | null): Promise<boole
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrapKey, encoder.encode(JSON.stringify(jwk)));
       const wrapped = b64(encoder.encode(JSON.stringify({ v: 1, iv: b64(iv), ct: b64(ct) })));
+      const { error: backupErr } = await supabaseClient
+        .from("user_key_backups")
+        .upsert({ user_id: userId, enc_private_key: wrapped, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+      if (backupErr) throw backupErr;
       const { error: upErr } = await supabaseClient
         .from("profiles")
-        .update({ public_key: publishedPub, enc_private_key: wrapped })
+        .update({ public_key: publishedPub })
         .eq("id", userId);
       if (upErr) throw upErr;
       pubKeyCache[userId] = publishedPub;

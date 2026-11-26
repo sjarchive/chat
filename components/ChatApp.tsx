@@ -1275,7 +1275,7 @@ export default function ChatApp() {
           .from("profiles")
           .update({ display_name: name })
           .eq("id", user.id)
-          .select();
+          .select("id, display_name, username, public_key");
         if (error) throw error;
         // An update that matches no row reports no error, so check we got
         // one back — otherwise the UI would show a name the database never
